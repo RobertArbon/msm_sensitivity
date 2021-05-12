@@ -8,6 +8,7 @@ import pickle
 import logging
 from multiprocessing import cpu_count, Pool
 from functools import partial
+from argparse import ArgumentParser
 
 import pandas as pd
 import numpy as np
@@ -15,28 +16,8 @@ import pyemma as pm
 from pyemma.coordinates.data._base.datasource import DataSource
 import mdtraj as md
 
-from . import searchspace as cons
 from .featurizers import distances, dihedrals
-#
-# def create_name(hp: Mapping) -> str:
-#     feature_keys = [x for x in hp.keys() if x.startswith('feature')]
-#     fname_list = []
-#     for key in feature_keys:
-#         elements = key.split('__')
-#         if 'value' == elements[1] or hp['feature__value'] == elements[1]:
-#             fname_list.append(f"{hp[key]}")
-#     name = f"{'_'.join(fname_list)}.h5"
-#     return name
-#
-# def filter_unique_hps(df: pd.DataFrame) -> pd.DataFrame:
-#     unique_ixs = []
-#     unique_names = []
-#     for i, row in df.iterrows():
-#         name = create_name(row.to_dict(into=dict))
-#         if not name in unique_names:
-#             unique_names.append(name)
-#             unique_ixs.append(i)
-#     return df.iloc[unique_ixs, :]
+
 
 @dataclass
 class Outputs:
@@ -57,16 +38,18 @@ def write_matrices(outputs: Outputs, out_dir: Path,
     pickle.dump(obj=d_outputs, file=file.open('wb'))
 
 
-def estimate_cmatrices(trajs: List[np.ndarray]) -> Outputs:
+def estimate_cmatrices(trajs: List[np.ndarray], lags: List[int]) -> Outputs:
     cmats = []
-    lags = []
-    for lag in cons.LAGS:
-        m = pm.msm.estimate_markov_model(trajs, lag=lag, reversible=True, connectivity='largest',
-                                             mincount_connectivity="1/n")
-        cmat = m.count_matrix_active
-        # logging.info(f"Estimated count matrix of size {cmat.shape} at lag {lag}")
+    for lag in lags:
+        cmat = None
+        try:
+            m = pm.msm.estimate_markov_model(trajs, lag=lag, reversible=True, connectivity='largest',
+                                                 mincount_connectivity="1/n")
+            cmat = m.count_matrix_active
+        except RuntimeError:
+            pass
+
         cmats.append(cmat)
-        lags.append(lag)
     return Outputs(count_matrices=cmats, lags=np.array(lags))
 
 
@@ -77,12 +60,8 @@ def get_sub_dict(hp_dict: Dict[str, List[Union[str, int]]], name: str) -> Mappin
 
 def discretize_trajectories(hp_dict: Dict[str, List[Union[str, int]]], trajs: List[np.ndarray]) -> List[np.ndarray]:
     tica = pm.coordinates.tica(trajs, **get_sub_dict(hp_dict, 'tica'))
-    # # logging.info(f"Estimated tica")
-    # logging.info(tica)
     y = tica.get_output()
-    kmeans = pm.coordinates.cluster_kmeans(y, **get_sub_dict(hp_dict, 'cluster'), fixed_seed=2934798)
-    # logging.info(f"Estimated kmeans")
-    # logging.info(kmeans)
+    kmeans = pm.coordinates.cluster_kmeans(y, **get_sub_dict(hp_dict, 'cluster'))
     z = kmeans.dtrajs
     z = [x.flatten() for x in z]
     return z
@@ -121,11 +100,11 @@ def get_trajs(traj_top_paths: Dict[str, List[Path]]) -> List[md.Trajectory]:
     return trajs
 
 
-def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.ndarray]):
+def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.ndarray], lags: List[int]):
     # logging.info('in bootstrap')
     feat_trajs = sample_trajectories(feat_trajs)
     disc_trajs = discretize_trajectories(hp_dict, feat_trajs)
-    outputs = estimate_cmatrices(disc_trajs)
+    outputs = estimate_cmatrices(disc_trajs, lags)
     outputs.hp = hp_dict
     return outputs
 
@@ -139,7 +118,7 @@ def get_feature_trajs(traj_top_paths: Dict[str, List[Path]],hp_dict: Dict[str, L
 
 def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]],
                              traj_top_paths: Dict[str, List[Path]],
-                             output_dir: Path) -> None:
+                             bs_samples: int, lags: List[int], output_dir: Path) -> None:
     """ Bootstraps the count matrices at a series of lag times.
     """
     hp_idx, hp_dict = config
@@ -149,15 +128,15 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
 
     ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
 
-    n_workers = min(cpu_count(), cons.BS_SAMPLES)
+    n_workers = min(cpu_count(), bs_samples)
     pool = Pool(n_workers)
     logging.info(f"Bootstrapping hyper-parameter index value {hp_idx}")
-    logging.info(f'Launching {cons.BS_SAMPLES} jobs on {n_workers} cores')
+    logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
 
     results = []
-    for i in range(cons.BS_SAMPLES):
+    for i in range(bs_samples):
         write_output = partial(write_matrices, sample_ix=i, out_dir=bs_dir)
-        results.append(pool.apply_async(func=do_bootstrap, args=(hp_dict, ftrajs), callback=write_output))
+        results.append(pool.apply_async(func=do_bootstrap, args=(hp_dict, ftrajs, lags), callback=write_output))
 
     for r in results:
         r.get()
@@ -167,18 +146,20 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
     logging.info(f'Finished boostrap hp_ix: {hp_idx}')
 
 
-def get_input_trajs_top() -> Dict[str, List[Path]]:
-    glob_str = cons.INPUT_TRAJ_GLOB
-    trajs = list(Path('/').glob(f"{glob_str}/*.xtc"))
-    top = list(Path('/').glob(f"{glob_str}/*.pdb"))[0]
+def get_input_trajs_top(data_dir: Path, top_path: Path, traj_glob: str) -> Dict[str, List[Path]]:
+    trajs = list(data_dir.glob(traj_glob))
+
+    if len(trajs) == 0:
+        raise RuntimeError('No trajectories found')
+    if not top_path.exists():
+        raise RuntimeError("Topolgy path doesn't exist")
+
+    top = str(top_path)
     trajs.sort()
-    assert trajs, 'no trajectories found'
-    assert top, 'no topology found'
     return {'top': top, 'trajs': trajs}
 
 
-def create_ouput_directory() -> Path:
-    path = Path(cons.NAME)
+def create_ouput_directory(path: Path) -> Path:
     path.mkdir(exist_ok=True)
     return path
 
@@ -192,26 +173,44 @@ def get_hyperparameters(path: str) -> pd.DataFrame:
 
 
 def setup_logger(out_dir: Path) -> None:
-    logging.basicConfig(filename=str(out_dir.joinpath(f"{cons.NAME}.log")),
+    logging.basicConfig(filename=str(out_dir.joinpath('log')),
                         filemode='w',
                         level=logging.INFO,
                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
-def main(hp_path: str) -> None:
-    output_dir = create_ouput_directory()
-    setup_logger(output_dir)
-    hps = get_hyperparameters(hp_path)
-    traj_top_paths = get_input_trajs_top()
+def parse_lags(rng: str) -> List[int]:
+    x = rng.split(":")
+    y = [int(i) for i in x]
+    lags = list(range(*y))
+    return lags
 
+
+def main(args, parser) -> None:
+    output_dir = create_ouput_directory(args.output_dir)
+    setup_logger(output_dir)
+    hps = get_hyperparameters(args.hp_sample)
+    traj_top_paths = get_input_trajs_top(args.data_dir, args.topology_path, args.trajectory_glob)
+    lags = parse_lags(args.lags)
     for i, row in hps.iterrows():
         # Making an explicit dict and str variable so that type hinting is explicit.
         hp = {k: v for k, v in row.to_dict().items()}
         ix = str(i)
-        bootstrap_count_matrices((ix, hp), traj_top_paths, output_dir)
+        bootstrap_count_matrices((ix, hp), traj_top_paths, args.num_repeats, lags, output_dir)
 
 
-if __name__ == '__main__':
-    main('./hp_sample.h5')
-
-pm.msm.its
+def configure_parser(sub_subparser: ArgumentParser):
+    p = sub_subparser.add_parser('count_matrices')
+    p.add_argument('-i', '--hp-sample', type=Path, help='Path to file that contains the hyperparameter samples')
+    p.add_argument('-d', '--data-dir', type=Path, help='Base directory used to determine trajectory and topology paths')
+    p.add_argument('-t', '--topology-path', type=Path, help='Topology path')
+    p.add_argument('-g', '--trajectory-glob', type=str, help='Trajectory glob string relative to --data-dir')
+    p.add_argument('-n', '--num-repeats', type=int, help='Number of bootstrap samples', default=100)
+    p.add_argument('-l', '--lags', type=str, help='Lags as a Python range specification start:end:stride', default='1:51:2')
+    p.add_argument('-o', '--output-dir', type=Path, help='Path to output directory')
+    p.add_argument('-s', '--seed', type=int, help='Random seed', default=None)
+    p.set_defaults(func=main)
+# if __name__ == '__main__':
+#     main('./hp_sample.h5')
+#
+# pm.msm.its
