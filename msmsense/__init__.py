@@ -4,7 +4,8 @@ Tests msm sensitivity to hyperparameters
 """
 
 # Add imports here
-from .msm_sensitivity import *
+from .sample_hps import main
+from .bootstrap_cmatrices import main
 
 # Handle versioneer
 from ._version import get_versions
@@ -12,3 +13,7 @@ versions = get_versions()
 __version__ = versions['version']
 __git_revision__ = versions['full-revisionid']
 del get_versions, versions
+
+from ._version import get_versions
+__version__ = get_versions()['version']
+del get_versions

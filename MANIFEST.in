@@ -4,4 +4,4 @@ include CODE_OF_CONDUCT.md
 include versioneer.py
 
 graft msm_sensitivity
-global-exclude *.py[cod] __pycache__ *.so
+global-exclude *.py[cod] __pycache__ *.soinclude msmsense/_version.py
