@@ -57,7 +57,7 @@ def get_search_space(path: Union[Path, None]):
 def main(args, parser) -> None:
     if args.seed is not None:
         np.random.seed(args.seed)
-    if args.search_space.suffix != '.py':
+    if args.search_space is not None and args.search_space.suffix != '.py':
         raise ValueError('Search space must be defined as dictionary in Python file.')
     if args.output_file.suffix != '.h5':
         raise ValueError('Output file must h5')
@@ -72,9 +72,11 @@ def main(args, parser) -> None:
 
 def configure_parser(sub_subparser: ArgumentParser):
     p = sub_subparser.add_parser('hyperparameters')
-    p.add_argument('-i', '--search-space', type=Path, help='Path to file that defines the HP search space dictionary')
+    p.add_argument('-i', '--search-space', type=Path, help='Path to file that defines the HP search space dictionary',
+                   required=False)
     p.add_argument('-n', '--num-trials', type=int, help='Number of HP trials', default=10)
-    p.add_argument('-o', '--output-file', type=Path, help='Path to hd5 file to store HP samples')
+    p.add_argument('-o', '--output-file', type=Path, help='Path to hd5 file to store HP samples',
+                   required=True)
     p.add_argument('-s', '--seed', type=int, help='Random seed', default=None)
     p.set_defaults(func=main)
 

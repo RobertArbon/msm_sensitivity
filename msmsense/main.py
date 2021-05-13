@@ -8,6 +8,7 @@ import sys
 import argparse
 
 from . import sample_hps
+from . import bootstrap_cmatrices
 # from . import parser_dump
 # from . import parser_skeleton
 # from . import parser_worker
@@ -29,6 +30,7 @@ def main():
     )
 
     sample_hps.configure_parser(sub_parsers)  # Docs say this is correct type.
+    bootstrap_cmatrices.configure_parser(sub_parsers)  # Docs say this is correct type.
 
     if len(sys.argv) == 1:
         sys.argv.append('-h')

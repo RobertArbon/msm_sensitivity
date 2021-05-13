@@ -58,12 +58,18 @@ def get_sub_dict(hp_dict: Dict[str, List[Union[str, int]]], name: str) -> Mappin
     return sub_dict
 
 
-def discretize_trajectories(hp_dict: Dict[str, List[Union[str, int]]], trajs: List[np.ndarray]) -> List[np.ndarray]:
+def discretize_trajectories(hp_dict: Dict[str, List[Union[str, int]]], trajs: List[np.ndarray],
+                            seed: Union[int, None]) -> List[np.ndarray]:
     tica = pm.coordinates.tica(trajs, **get_sub_dict(hp_dict, 'tica'))
     y = tica.get_output()
-    kmeans = pm.coordinates.cluster_kmeans(y, **get_sub_dict(hp_dict, 'cluster'))
+
+    # np.save(Path('1FME/hp_0').joinpath('ttraj0.npy'), y[0])
+    # tica.save('1FME/hp_0/tica.pm')
+    kmeans = pm.coordinates.cluster_kmeans(y, **get_sub_dict(hp_dict, 'cluster'), fixed_seed=seed)
     z = kmeans.dtrajs
-    z = [x.flatten() for x in z]
+    # kmeans.save('1FME/hp_0/kmeans.pm')
+    # np.save(Path('1FME/hp_0').joinpath('dtraj0.npy'), z[0])
+
     return z
 
 
@@ -73,13 +79,18 @@ def get_probabilities(trajs: List[np.ndarray]) -> np.ndarray:
     return probs
 
 
-def sample_trajectories(trajs: List[np.ndarray]) -> List[np.ndarray]:
-    # ix = np.arange(len(trajs))
-    # probs = get_probabilities(trajs)
-    # sample_ix = np.random.choice(ix, size=ix.shape[0], p=probs, replace=True)
-    # sampled_trajs = [trajs[i] for i in sample_ix]
-    # return sampled_trajs
-    return trajs
+def sample_trajectories(trajs: List[np.ndarray], seed: Union[int, None]) -> List[np.ndarray]:
+    if seed is None:
+        rng = np.random.default_rng()
+    else:
+        rng = np.random.default_rng(seed)
+
+    ix = np.arange(len(trajs))
+    probs = get_probabilities(trajs)
+
+    sample_ix = rng.choice(ix, size=ix.shape[0], p=probs, replace=True)
+    sampled_trajs = [trajs[i] for i in sample_ix]
+    return sampled_trajs
 
 
 def create_features(hp_dict: Dict[str, List[Union[str, int]]], trajs: List[md.Trajectory]) -> List[np.ndarray]:
@@ -100,10 +111,11 @@ def get_trajs(traj_top_paths: Dict[str, List[Path]]) -> List[md.Trajectory]:
     return trajs
 
 
-def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.ndarray], lags: List[int]):
+def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.ndarray], seed: Union[int, None],
+                 lags: List[int]):
     # logging.info('in bootstrap')
-    feat_trajs = sample_trajectories(feat_trajs)
-    disc_trajs = discretize_trajectories(hp_dict, feat_trajs)
+    feat_trajs = sample_trajectories(feat_trajs, seed)
+    disc_trajs = discretize_trajectories(hp_dict, feat_trajs, seed)
     outputs = estimate_cmatrices(disc_trajs, lags)
     outputs.hp = hp_dict
     return outputs
@@ -117,7 +129,7 @@ def get_feature_trajs(traj_top_paths: Dict[str, List[Path]],hp_dict: Dict[str, L
 
 
 def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]],
-                             traj_top_paths: Dict[str, List[Path]],
+                             traj_top_paths: Dict[str, List[Path]], seed: int,
                              bs_samples: int, lags: List[int], output_dir: Path) -> None:
     """ Bootstraps the count matrices at a series of lag times.
     """
@@ -127,6 +139,7 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
     bs_dir.mkdir(exist_ok=True)
 
     ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
+    np.save(bs_dir.joinpath('ftraj0.npy'), ftrajs[0])
 
     n_workers = min(cpu_count(), bs_samples)
     pool = Pool(n_workers)
@@ -136,7 +149,7 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
     results = []
     for i in range(bs_samples):
         write_output = partial(write_matrices, sample_ix=i, out_dir=bs_dir)
-        results.append(pool.apply_async(func=do_bootstrap, args=(hp_dict, ftrajs, lags), callback=write_output))
+        results.append(pool.apply_async(func=do_bootstrap, args=(hp_dict, ftrajs, seed, lags), callback=write_output))
 
     for r in results:
         r.get()
@@ -148,14 +161,16 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
 
 def get_input_trajs_top(data_dir: Path, top_path: Path, traj_glob: str) -> Dict[str, List[Path]]:
     trajs = list(data_dir.glob(traj_glob))
-
+    top_path = data_dir.joinpath(top_path)
     if len(trajs) == 0:
         raise RuntimeError('No trajectories found')
     if not top_path.exists():
-        raise RuntimeError("Topolgy path doesn't exist")
+        raise RuntimeError(f"Topolgy path doesn't exist at:\n{top_path}")
 
     top = str(top_path)
     trajs.sort()
+    logging.info(f"Topology loaded: {top}")
+    logging.info(f"{len(trajs)} trajectories loaded: \n{trajs[:5]}\n...\n{trajs[-5:]}")
     return {'top': top, 'trajs': trajs}
 
 
@@ -187,17 +202,17 @@ def parse_lags(rng: str) -> List[int]:
 
 
 def main(args, parser) -> None:
-    output_dir = create_ouput_directory(args.output_dir)
+    output_dir = create_ouput_directory(args.output_dir.absolute())
     setup_logger(output_dir)
     hps = get_hyperparameters(args.hp_sample)
-    traj_top_paths = get_input_trajs_top(args.data_dir, args.topology_path, args.trajectory_glob)
+    traj_top_paths = get_input_trajs_top(args.data_dir.absolute(), args.topology_path, args.trajectory_glob)
     lags = parse_lags(args.lags)
     for i, row in hps.iterrows():
         # Making an explicit dict and str variable so that type hinting is explicit.
         hp = {k: v for k, v in row.to_dict().items()}
         ix = str(i)
-        bootstrap_count_matrices((ix, hp), traj_top_paths, args.num_repeats, lags, output_dir)
-
+        bootstrap_count_matrices((ix, hp), traj_top_paths, args.seed, args.num_repeats, lags, output_dir)
+        raise Exception('Fin')
 
 def configure_parser(sub_subparser: ArgumentParser):
     p = sub_subparser.add_parser('count_matrices')
@@ -205,8 +220,9 @@ def configure_parser(sub_subparser: ArgumentParser):
     p.add_argument('-d', '--data-dir', type=Path, help='Base directory used to determine trajectory and topology paths')
     p.add_argument('-t', '--topology-path', type=Path, help='Topology path')
     p.add_argument('-g', '--trajectory-glob', type=str, help='Trajectory glob string relative to --data-dir')
-    p.add_argument('-n', '--num-repeats', type=int, help='Number of bootstrap samples', default=100)
-    p.add_argument('-l', '--lags', type=str, help='Lags as a Python range specification start:end:stride', default='1:51:2')
+    p.add_argument('-r', '--num-repeats', type=int, help='Number of bootstrap samples')
+    p.add_argument('-l', '--lags', type=str, help='Lags as a Python range specification start:end:stride',
+                   default='2:51:2')
     p.add_argument('-o', '--output-dir', type=Path, help='Path to output directory')
     p.add_argument('-s', '--seed', type=int, help='Random seed', default=None)
     p.set_defaults(func=main)
