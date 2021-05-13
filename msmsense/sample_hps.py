@@ -4,7 +4,7 @@ Creates a dataframe of random hyperparameters as defined by the space in constan
 from pathlib import Path
 from typing import Dict, Union, List
 from argparse import ArgumentParser
-import importlib.util
+import yaml
 
 import numpy as np
 import pandas as pd
@@ -44,21 +44,25 @@ def save_sample(df: pd.DataFrame, path: Path) -> None:
     df.to_hdf(str(path), key='hyperparameters')
 
 
-# TODO - replace with YAML
+def parse_yaml(path: Path) -> Dict:
+    with path.open('rt') as f:
+        data = yaml.load(f, Loader=yaml.FullLoader)
+    return data
+
+
 def get_search_space(path: Union[Path, None]):
     if path is None:
-        return cons.HP_SPACE
+        thisdir = Path(__file__).parent
+        return parse_yaml(thisdir.joinpath('searchspace.yaml'))
     else:
-        spec = importlib.util.spec_from_file_location(path.stem, path)
-        module = importlib.util.module_from_spec(spec)
-        return module.HP_SPACE
+        return parse_yaml(path)
 
 
 def main(args, parser) -> None:
     if args.seed is not None:
         np.random.seed(args.seed)
-    if args.search_space is not None and args.search_space.suffix != '.py':
-        raise ValueError('Search space must be defined as dictionary in Python file.')
+    if args.search_space is not None and args.search_space.suffix != '.yaml':
+        raise ValueError('Search space must be defined as YAML.')
     if args.output_file.suffix != '.h5':
         raise ValueError('Output file must h5')
 
