@@ -130,7 +130,7 @@ def get_feature_trajs(traj_top_paths: Dict[str, List[Path]],hp_dict: Dict[str, L
 
 def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]],
                              traj_top_paths: Dict[str, List[Path]], seed: int,
-                             bs_samples: int, lags: List[int], output_dir: Path) -> None:
+                             bs_samples: int, n_cores: int, lags: List[int], output_dir: Path) -> None:
     """ Bootstraps the count matrices at a series of lag times.
     """
     hp_idx, hp_dict = config
@@ -139,9 +139,8 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
     bs_dir.mkdir(exist_ok=True)
 
     ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
-    np.save(bs_dir.joinpath('ftraj0.npy'), ftrajs[0])
 
-    n_workers = min(cpu_count(), bs_samples)
+    n_workers = min(n_cores, bs_samples)
     pool = Pool(n_workers)
     logging.info(f"Bootstrapping hyper-parameter index value {hp_idx}")
     logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
@@ -211,8 +210,8 @@ def main(args, parser) -> None:
         # Making an explicit dict and str variable so that type hinting is explicit.
         hp = {k: v for k, v in row.to_dict().items()}
         ix = str(i)
-        bootstrap_count_matrices((ix, hp), traj_top_paths, args.seed, args.num_repeats, lags, output_dir)
-        raise Exception('Fin')
+        bootstrap_count_matrices((ix, hp), traj_top_paths, args.seed, args.num_repeats, args.num_cores, lags, output_dir)
+
 
 def configure_parser(sub_subparser: ArgumentParser):
     p = sub_subparser.add_parser('count_matrices')
@@ -221,6 +220,7 @@ def configure_parser(sub_subparser: ArgumentParser):
     p.add_argument('-t', '--topology-path', type=Path, help='Topology path')
     p.add_argument('-g', '--trajectory-glob', type=str, help='Trajectory glob string relative to --data-dir')
     p.add_argument('-r', '--num-repeats', type=int, help='Number of bootstrap samples')
+    p.add_argument('-n', '--num-cores', type=int, help='Number of cpu cores to use.', default=1)
     p.add_argument('-l', '--lags', type=str, help='Lags as a Python range specification start:end:stride',
                    default='2:51:2')
     p.add_argument('-o', '--output-dir', type=Path, help='Path to output directory')
