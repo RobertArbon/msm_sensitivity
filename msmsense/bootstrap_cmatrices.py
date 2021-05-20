@@ -114,7 +114,6 @@ def get_trajs(traj_top_paths: Dict[str, List[Path]]) -> List[md.Trajectory]:
 
 def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.ndarray], seed: Union[int, None],
                  lags: List[int]):
-    # logging.info('in bootstrap')
     feat_trajs = sample_trajectories(feat_trajs, seed)
     disc_trajs = discretize_trajectories(hp_dict, feat_trajs, seed)
     outputs = estimate_cmatrices(disc_trajs, lags)
@@ -127,7 +126,6 @@ def get_feature_trajs(traj_top_paths: Dict[str, List[Path]],hp_dict: Dict[str, L
     logging.info(f"Loaded {len(trajs)} coordinate trajectories")
     feat_trajs = create_features(hp_dict, trajs)
     logging.info(f"Added features")
-    del trajs
     return feat_trajs
 
 
@@ -144,22 +142,20 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
     ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
 
     n_workers = min(n_cores, bs_samples)
-    # pool = Pool(n_workers)
+    pool = Pool(n_workers)
     logging.info(f"Bootstrapping hyper-parameter index value {hp_idx}")
     logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
 
-    # results = []
+    results = []
     for i in range(bs_samples):
-        results = do_bootstrap(hp_dict, ftrajs, seed, lags)
-        write_matrices(results, out_dir=bs_dir, sample_ix=i)
-        # write_output = partial(write_matrices, sample_ix=i, out_dir=bs_dir)
-        # results.append(pool.apply_async(func=do_bootstrap, args=(hp_dict, ftrajs, seed, lags), callback=write_output))
+        write_output = partial(write_matrices, sample_ix=i, out_dir=bs_dir)
+        results.append(pool.apply_async(func=do_bootstrap, args=(hp_dict, ftrajs, seed, lags), callback=write_output))
 
-    # for r in results:
-    #     r.get()
+    for r in results:
+        r.get()
 
-    # pool.close()
-    # pool.join()
+    pool.close()
+    pool.join()
     logging.info(f'Finished boostrap hp_ix: {hp_idx}')
 
 
