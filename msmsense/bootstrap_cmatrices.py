@@ -125,6 +125,7 @@ def get_feature_trajs(traj_top_paths: Dict[str, List[Path]],hp_dict: Dict[str, L
     trajs = get_trajs(traj_top_paths)
     feat_trajs = create_features(hp_dict, trajs)
     logging.info(f"Added features")
+    del trajs
     return feat_trajs
 
 
