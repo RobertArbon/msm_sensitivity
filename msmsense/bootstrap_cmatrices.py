@@ -226,7 +226,3 @@ def configure_parser(sub_subparser: ArgumentParser):
     p.add_argument('-o', '--output-dir', type=Path, help='Path to output directory')
     p.add_argument('-s', '--seed', type=int, help='Random seed', default=None)
     p.set_defaults(func=main)
-# if __name__ == '__main__':
-#     main('./hp_sample.h5')
-#
-# pm.msm.its
