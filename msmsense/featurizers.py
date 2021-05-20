@@ -33,6 +33,7 @@ def _dihedrals(traj: md.Trajectory, indices: np.ndarray) -> np.ndarray:
 def dihedrals(trajs: List[md.Trajectory], which: Optional[str] = 'all') -> List[np.ndarray]:
     logging.info(f"Creating dihedral trajectories using {which} torsions")
     indices = _dihedral_indices(trajs[0].topology, which)
+    logging.info(f"Number of dimensions: {indices.shape[0]}")
     ftrajs = [_dihedrals(traj, indices) for traj in trajs]
     return ftrajs
 
@@ -54,6 +55,8 @@ def distances(trajs: List[md.Trajectory], scheme: Optional[str] = 'closest-heavy
     logging.info(f"Creating distance trajectories using scheme: {scheme}, with {transform} transform")
     if transform == 'logistic':
         logging.info(f"centre: {centre}, steepness: {steepness}")
+    test = _distances(trajs[0], scheme, transform, centre, steepness)
+    logging.info(f"Number of dimensions: {test.shape[1]}")
     ftrajs = [_distances(traj, scheme, transform, centre, steepness) for traj in trajs]
     return ftrajs
 
