@@ -1,4 +1,5 @@
 from typing import Optional, List, Union
+import logging
 
 import mdtraj as md
 import numpy as np
@@ -30,6 +31,7 @@ def _dihedrals(traj: md.Trajectory, indices: np.ndarray) -> np.ndarray:
 
 
 def dihedrals(trajs: List[md.Trajectory], which: Optional[str] = 'all') -> List[np.ndarray]:
+    logging.info(f"Creating dihedral trajectories using {which} torsions")
     indices = _dihedral_indices(trajs[0].topology, which)
     ftrajs = [_dihedrals(traj, indices) for traj in trajs]
     return ftrajs
@@ -49,6 +51,9 @@ def _distances(traj: md.Trajectory, scheme: str, transform: str,
 def distances(trajs: List[md.Trajectory], scheme: Optional[str] = 'closest-heavy',
               transform: Optional[str] = 'linear', centre: Optional[Union[float, None]] = None,
               steepness: Optional[Union[float, None]] = None) -> List[np.ndarray]:
+    logging.info(f"Creating distance trajectories using scheme: {scheme}, with {transform} transform")
+    if transform == 'logistic':
+        logging.info(f"centre: {centre}, steepness: {steepness}")
     ftrajs = [_distances(traj, scheme, transform, centre, steepness) for traj in trajs]
     return ftrajs
 

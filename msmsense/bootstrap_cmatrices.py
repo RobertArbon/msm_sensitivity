@@ -95,6 +95,7 @@ def sample_trajectories(trajs: List[np.ndarray], seed: Union[int, None]) -> List
 
 def create_features(hp_dict: Dict[str, List[Union[str, int]]], trajs: List[md.Trajectory]) -> List[np.ndarray]:
     feature = hp_dict['feature__value']
+    logging.info(f"Creating {feature} feature")
     if feature == 'dihedrals':
         feat_trajs = dihedrals(trajs=trajs, **get_sub_dict(hp_dict, 'dihedrals'))
     elif feature == 'distances':
@@ -123,6 +124,7 @@ def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.
 
 def get_feature_trajs(traj_top_paths: Dict[str, List[Path]],hp_dict: Dict[str, List[Union[str, int]]]) -> List[np.ndarray]:
     trajs = get_trajs(traj_top_paths)
+    logging.info(f"Loaded {len(trajs)} coordinate trajectories")
     feat_trajs = create_features(hp_dict, trajs)
     logging.info(f"Added features")
     del trajs
@@ -138,7 +140,7 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
 
     bs_dir = output_dir.joinpath(f"hp_{str(hp_idx)}")
     bs_dir.mkdir(exist_ok=True)
-
+    logging.info(f"Getting feature trajectories")
     ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
 
     n_workers = min(n_cores, bs_samples)
@@ -185,7 +187,7 @@ def get_hyperparameters(path: str) -> pd.DataFrame:
     hps = pd.read_hdf(path)
     logging.info(f"Hyper-parameter samples read from {str(path)}")
     logging.info(f"Hyper-parameter samples shape: {hps.shape}")
-    logging.info(f"{hps.head()}")
+    logging.info(f"\n{hps.head()}")
     return hps
 
 
@@ -213,6 +215,7 @@ def main(args, parser) -> None:
         # Making an explicit dict and str variable so that type hinting is explicit.
         hp = {k: v for k, v in row.to_dict().items()}
         ix = str(i)
+        logging.info(f"Running hyperparameters: {row}")
         bootstrap_count_matrices((ix, hp), traj_top_paths, args.seed, args.num_repeats, args.num_cores, lags, output_dir)
 
 
