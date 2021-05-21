@@ -1,7 +1,7 @@
 """
 for a system (e.g., protein) saves features.
 """
-from typing import Dict, List, Mapping, Tuple, Optional, Union
+from typing import Dict, List, Mapping, Tuple, Optional, Union, Any
 from pathlib import Path
 from dataclasses import dataclass
 import pickle
@@ -79,15 +79,17 @@ def get_probabilities(trajs: List[np.ndarray]) -> np.ndarray:
     return probs
 
 
-def sample_trajectories(trajs: List[np.ndarray], seed: Union[int, None]) -> List[np.ndarray]:
+def get_rng(seed: Union[int, None]) -> Any:
     if seed is None:
         rng = np.random.default_rng()
     else:
         rng = np.random.default_rng(seed)
+    return rng
 
+
+def sample_trajectories(trajs: List[np.ndarray], rng: Any) -> List[np.ndarray]:
     ix = np.arange(len(trajs))
     probs = get_probabilities(trajs)
-
     sample_ix = rng.choice(ix, size=ix.shape[0], p=probs, replace=True)
     sampled_trajs = [trajs[i] for i in sample_ix]
     return sampled_trajs
@@ -138,16 +140,19 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
 
     bs_dir = output_dir.joinpath(f"hp_{str(hp_idx)}")
     bs_dir.mkdir(exist_ok=True)
+
     logging.info(f"Getting feature trajectories")
-    ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
+    all_ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
+    rng = get_rng(seed)
 
     n_workers = min(n_cores, bs_samples)
     pool = Pool(n_workers)
+
     logging.info(f"Bootstrapping hyper-parameter index value {hp_idx}")
     logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
-
     results = []
     for i in range(bs_samples):
+        ftrajs = sample_trajectories(all_ftrajs, rng)
         write_output = partial(write_matrices, sample_ix=i, out_dir=bs_dir)
         results.append(pool.apply_async(func=do_bootstrap, args=(hp_dict, ftrajs, seed, lags), callback=write_output))
 
