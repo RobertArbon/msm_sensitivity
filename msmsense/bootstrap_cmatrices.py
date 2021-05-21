@@ -116,7 +116,6 @@ def get_trajs(traj_top_paths: Dict[str, List[Path]]) -> List[md.Trajectory]:
 
 def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.ndarray], seed: Union[int, None],
                  lags: List[int]):
-    feat_trajs = sample_trajectories(feat_trajs, seed)
     disc_trajs = discretize_trajectories(hp_dict, feat_trajs, seed)
     outputs = estimate_cmatrices(disc_trajs, lags)
     outputs.hp = hp_dict
