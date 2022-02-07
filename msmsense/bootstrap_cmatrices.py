@@ -3,12 +3,16 @@ for a system (e.g., protein) saves features.
 """
 from typing import Dict, List, Mapping, Tuple, Optional, Union, Any
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import pickle
 import logging
 from multiprocessing import cpu_count, Pool
 from functools import partial
 from argparse import ArgumentParser
+
+from msmtools.estimation import transition_matrix as _transition_matrix
+from msmtools.analysis import timescales as _timescales
+from pyemma.util.metrics import vamp_score
 
 import pandas as pd
 import numpy as np
@@ -19,27 +23,55 @@ import mdtraj as md
 from .featurizers import distances, dihedrals
 
 
+MAX_PROCS = 20  # don't want more than this many processes
+
+
 @dataclass
 class Outputs:
-    count_matrices: List[np.ndarray]
-    lags: np.ndarray
-    sample_ix: Optional[int] = None
-    hp: Optional[Dict[str, Union[str, int]]] = None
+    vamp_by_lag_by_proc: Dict[int, Dict[int, np.ndarray]]
+    ts_by_lag_by_proc: Dict[int, Dict[int, np.ndarray]]
+    ix: int = None
 
 
-def write_matrices(outputs: Outputs, out_dir: Path,
-                   sample_ix: int) -> None:
-    outputs.sample_ix = sample_ix
-    file = out_dir.joinpath(f"{outputs.sample_ix}.pkl")
-    d_outputs = {'count_matrices': outputs.count_matrices,
-                 'lags': outputs.lags,
-                 'sample_ix': outputs.sample_ix,
-                 'hp': outputs.hp}
-    pickle.dump(obj=d_outputs, file=file.open('wb'))
+
+def write_outputs(outputs: Outputs, out_path: Path) -> None:
+    d_outputs = {'ts': outputs.ts_by_lag_by_proc,
+                 'vamp': outputs.vamp_by_lag_by_proc,
+                 'hp_ix': outputs.ix}
+    pickle.dump(obj=d_outputs, file=out_path.open('wb'))
 
 
-def estimate_cmatrices(trajs: List[np.ndarray], lags: List[int]) -> Outputs:
-    cmats = []
+def vamp(cmat, T, method, k):
+    C0t = cmat
+    C00 = np.diag(C0t.sum(axis=1))
+    Ctt = np.diag(C0t.sum(axis=0))
+    return vamp_score(T, C00, C0t, Ctt, C00, C0t, Ctt,
+                      k=k, score=method)
+
+
+def score_cmats(cmats_by_lag) -> Outputs:
+    ts_by_lag_by_proc = dict()
+    vamp_by_lag_by_proc = dict()
+    for lag, cmat in cmats_by_lag.items():
+        if cmat is not None:
+            # Transition matrix
+            t_mat = _transition_matrix(cmat, reversible=True)
+            # timescales
+            ts = _timescales(t_mat, tau=lag)
+            ts = ts[1:]
+            num_its = min(MAX_PROCS, int(np.sum(ts > lag)))
+            proc_labels = (np.arange(num_its)+2).astype(int)
+            ts_by_lag_by_proc[int(lag)] = dict(zip(proc_labels, ts[:num_its]))
+            # VAMP scores
+            vamp_by_lag_by_proc[int(lag)] = {k: vamp(cmat, t_mat, method='VAMP2', k=k) for k in proc_labels}
+
+    outputs = Outputs(vamp_by_lag_by_proc=vamp_by_lag_by_proc,
+                      ts_by_lag_by_proc=ts_by_lag_by_proc)
+    return outputs
+
+
+def estimate_cmatrices(trajs: List[np.ndarray], lags: List[int]) -> Dict[int, np.ndarray]:
+    cmats_by_lag = dict()
     for lag in lags:
         cmat = None
         try:
@@ -49,8 +81,8 @@ def estimate_cmatrices(trajs: List[np.ndarray], lags: List[int]) -> Outputs:
         except RuntimeError:
             pass
 
-        cmats.append(cmat)
-    return Outputs(count_matrices=cmats, lags=np.array(lags))
+        cmats_by_lag[int(lag)] = cmat
+    return cmats_by_lag
 
 
 def get_sub_dict(hp_dict: Dict[str, List[Union[str, int]]], name: str) -> Mapping:
@@ -62,14 +94,8 @@ def discretize_trajectories(hp_dict: Dict[str, List[Union[str, int]]], trajs: Li
                             seed: Union[int, None]) -> List[np.ndarray]:
     tica = pm.coordinates.tica(trajs, **get_sub_dict(hp_dict, 'tica'))
     y = tica.get_output()
-
-    # np.save(Path('1FME/hp_0').joinpath('ttraj0.npy'), y[0])
-    # tica.save('1FME/hp_0/tica.pm')
     kmeans = pm.coordinates.cluster_kmeans(y, **get_sub_dict(hp_dict, 'cluster'), fixed_seed=seed)
     z = kmeans.dtrajs
-    # kmeans.save('1FME/hp_0/kmeans.pm')
-    # np.save(Path('1FME/hp_0').joinpath('dtraj0.npy'), z[0])
-
     return z
 
 
@@ -115,11 +141,13 @@ def get_trajs(traj_top_paths: Dict[str, List[Path]]) -> List[md.Trajectory]:
 
 
 def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.ndarray], seed: Union[int, None],
-                 lags: List[int]):
+                 lags: List[int], out_dir: Path, hp_idx: int):
     disc_trajs = discretize_trajectories(hp_dict, feat_trajs, seed)
-    outputs = estimate_cmatrices(disc_trajs, lags)
-    outputs.hp = hp_dict
-    return outputs
+    cmats_by_lag = estimate_cmatrices(disc_trajs, lags)
+    outputs = score_cmats(cmats_by_lag)
+    outputs.ix = hp_idx
+    write_outputs(outputs, out_dir)
+    return True
 
 
 def get_feature_trajs(traj_top_paths: Dict[str, List[Path]],hp_dict: Dict[str, List[Union[str, int]]]) -> List[np.ndarray]:
@@ -152,8 +180,9 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
     results = []
     for i in range(bs_samples):
         ftrajs = sample_trajectories(all_ftrajs, rng)
-        write_output = partial(write_matrices, sample_ix=i, out_dir=bs_dir)
-        results.append(pool.apply_async(func=do_bootstrap, args=(hp_dict, ftrajs, seed, lags), callback=write_output))
+        results.append(pool.apply_async(func=do_bootstrap,
+                                        args=(hp_dict, ftrajs, seed, lags,
+                                              bs_dir.joinpath(f"{i}.pkl"), hp_idx)))
 
     for r in results:
         r.get()
