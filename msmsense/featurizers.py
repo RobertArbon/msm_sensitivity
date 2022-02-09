@@ -1,4 +1,4 @@
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict
 import logging
 
 import mdtraj as md
@@ -16,8 +16,7 @@ def _dihedral_indices(top: md.Topology, which: str) -> np.ndarray:
                          indices_chi2(top),
                          indices_chi3(top),
                          indices_chi4(top),
-                         indices_chi5(top),
-                         indices_omega(top)])
+                         indices_chi5(top)])
     indices = np.vstack(indices)
     assert indices.shape[1] == 4
     return indices
@@ -25,16 +24,19 @@ def _dihedral_indices(top: md.Topology, which: str) -> np.ndarray:
 
 def _dihedrals(traj: md.Trajectory, indices: np.ndarray) -> np.ndarray:
     res = compute_dihedrals(traj, indices)
-    rad = np.dstack((np.cos(res), np.sin(res)))
-    rad = rad.reshape(rad.shape[0], rad.shape[1] * rad.shape[2])
+    rad = np.concatenate([np.cos(res), np.sin(res)], axis=1)
     return rad
 
 
-def dihedrals(trajs: List[md.Trajectory], which: Optional[str] = 'all') -> List[np.ndarray]:
+def dihedrals(traj_top_dict: Dict[str, List[str]], which: Optional[str] = 'all') -> List[np.ndarray]:
     logging.info(f"Creating dihedral trajectories using {which} torsions")
-    indices = _dihedral_indices(trajs[0].topology, which)
-    logging.info(f"Number of dimensions: {indices.shape[0]}")
-    ftrajs = [_dihedrals(traj, indices) for traj in trajs]
+    top = md.load(traj_top_dict['top']).topology
+    indices = _dihedral_indices(top, which)
+    logging.info(f"Number of raw dimensions: {indices.shape[0]}")
+    ftrajs = []
+    for traj_path in traj_top_dict['trajs']:
+        traj = md.load(traj_path,top=top)
+        ftrajs.append(_dihedrals(traj, indices))
     return ftrajs
 
 
@@ -49,15 +51,25 @@ def _distances(traj: md.Trajectory, scheme: str, transform: str,
     return feat
 
 
-def distances(trajs: List[md.Trajectory], scheme: Optional[str] = 'closest-heavy',
+def distances(traj_top_dict: Dict[str, List[str]], scheme: Optional[str] = 'closest-heavy',
               transform: Optional[str] = 'linear', centre: Optional[Union[float, None]] = None,
               steepness: Optional[Union[float, None]] = None) -> List[np.ndarray]:
     logging.info(f"Creating distance trajectories using scheme: {scheme}, with {transform} transform")
     if transform == 'logistic':
         logging.info(f"centre: {centre}, steepness: {steepness}")
-    test = _distances(trajs[0], scheme, transform, centre, steepness)
-    logging.info(f"Number of dimensions: {test.shape[1]}")
-    ftrajs = [_distances(traj, scheme, transform, centre, steepness) for traj in trajs]
+    # Check for silly dimensions
+    traj = md.load(traj_top_dict['trajs'][0], top=traj_top_dict['top'])
+    test = _distances(traj, scheme, transform, centre, steepness)
+    if test.shape[1] > 1000 and ('closest' in scheme):
+        logging.info("Closest scheme is memory intensive. Consider different scheme.")
+    elif test.shape[1] > 5000:
+        logging.info("Large number of contact distances. Consider changing number of contacts")
+    else:
+        logging.info(f"Number of dimensions: {test.shape[1]}")
+    ftrajs = []
+    for traj_path in traj_top_dict['trajs']:
+        traj = md.load(traj_path, top=traj_top_dict['top'])
+        ftrajs.append(_distances(traj, scheme, transform, centre, steepness))
     return ftrajs
 
 # def side_sidechain_torsions(reader: DataSource) -> DataSource:

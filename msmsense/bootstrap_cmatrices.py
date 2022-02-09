@@ -33,7 +33,6 @@ class Outputs:
     ix: int = None
 
 
-
 def write_outputs(outputs: Outputs, out_path: Path) -> None:
     d_outputs = {'ts': outputs.ts_by_lag_by_proc,
                  'vamp': outputs.vamp_by_lag_by_proc,
@@ -94,6 +93,7 @@ def discretize_trajectories(hp_dict: Dict[str, List[Union[str, int]]], trajs: Li
                             seed: Union[int, None]) -> List[np.ndarray]:
     tica = pm.coordinates.tica(trajs, **get_sub_dict(hp_dict, 'tica'))
     y = tica.get_output()
+
     kmeans = pm.coordinates.cluster_kmeans(y, **get_sub_dict(hp_dict, 'cluster'), fixed_seed=seed)
     z = kmeans.dtrajs
     return z
@@ -113,21 +113,24 @@ def get_rng(seed: Union[int, None]) -> Any:
     return rng
 
 
-def sample_trajectories(trajs: List[np.ndarray], rng: Any) -> List[np.ndarray]:
+def sample_trajectories(trajs: List[np.ndarray], rng: Any, randomize: bool = True) -> Tuple[List[np.ndarray], np.ndarray]:
     ix = np.arange(len(trajs))
-    probs = get_probabilities(trajs)
-    sample_ix = rng.choice(ix, size=ix.shape[0], p=probs, replace=True)
+    if randomize:
+        probs = get_probabilities(trajs)
+        sample_ix = rng.choice(ix, size=ix.shape[0], p=probs, replace=True)
+    else:
+        sample_ix = ix
     sampled_trajs = [trajs[i] for i in sample_ix]
-    return sampled_trajs
+    return sampled_trajs, sample_ix
 
 
-def create_features(hp_dict: Dict[str, List[Union[str, int]]], trajs: List[md.Trajectory]) -> List[np.ndarray]:
+def create_features(hp_dict: Dict[str, List[Union[str, int]]], trajs_top_dict: Dict[str, List[str]]) -> List[np.ndarray]:
     feature = hp_dict['feature__value']
     logging.info(f"Creating {feature} feature")
     if feature == 'dihedrals':
-        feat_trajs = dihedrals(trajs=trajs, **get_sub_dict(hp_dict, 'dihedrals'))
+        feat_trajs = dihedrals(traj_top_dict=trajs_top_dict, **get_sub_dict(hp_dict, 'dihedrals'))
     elif feature == 'distances':
-        feat_trajs = distances(trajs=trajs, **get_sub_dict(hp_dict, 'distances'))
+        feat_trajs = distances(traj_top_dict=trajs_top_dict, **get_sub_dict(hp_dict, 'distances'))
     else:
         raise RuntimeError('Feature not recognized')
     return feat_trajs
@@ -150,21 +153,21 @@ def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.
     return True
 
 
-def get_feature_trajs(traj_top_paths: Dict[str, List[Path]],hp_dict: Dict[str, List[Union[str, int]]]) -> List[np.ndarray]:
-    trajs = get_trajs(traj_top_paths)
-    logging.info(f"Loaded {len(trajs)} coordinate trajectories")
-    feat_trajs = create_features(hp_dict, trajs)
+def get_feature_trajs(traj_top_paths: Dict[str, List[str]],hp_dict: Dict[str, List[Union[str, int]]]) -> List[np.ndarray]:
+    traj_top_paths['trajs'].sort()
+    feat_trajs = create_features(hp_dict, traj_top_paths)
     logging.info(f"Added features")
     return feat_trajs
 
 
 def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]],
-                             traj_top_paths: Dict[str, List[Path]], seed: int,
+                             traj_top_paths: Dict[str, List[str]], seed: int,
                              bs_samples: int, n_cores: int, lags: List[int], output_dir: Path) -> None:
     """ Bootstraps the count matrices at a series of lag times.
     """
     hp_idx, hp_dict = config
-
+    hp_idx = int(hp_idx)
+    
     bs_dir = output_dir.joinpath(f"hp_{str(hp_idx)}")
     bs_dir.mkdir(exist_ok=True)
 
@@ -173,26 +176,31 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
     rng = get_rng(seed)
 
     n_workers = min(n_cores, bs_samples)
-    pool = Pool(n_workers)
-
     logging.info(f"Bootstrapping hyper-parameter index value {hp_idx}")
-    logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
     results = []
-    for i in range(bs_samples):
-        ftrajs = sample_trajectories(all_ftrajs, rng)
-        results.append(pool.apply_async(func=do_bootstrap,
-                                        args=(hp_dict, ftrajs, seed, lags,
-                                              bs_dir.joinpath(f"{i}.pkl"), hp_idx)))
-
-    for r in results:
-        r.get()
-
-    pool.close()
-    pool.join()
+    bs_dict = dict()
+    if n_workers > 1:
+        pool = Pool(n_workers)
+        logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
+        for i in range(bs_samples):
+            ftrajs, _ = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
+            results.append(pool.apply_async(func=do_bootstrap,
+                                            args=(hp_dict, ftrajs, seed, lags,
+                                                  bs_dir.joinpath(f"{i}.pkl"), hp_idx)))
+    
+        for r in results:
+            r.get()
+    
+        pool.close()
+        pool.join()
+    else: 
+        for i in range(bs_samples):
+            ftrajs, _ = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
+            do_bootstrap(hp_dict, ftrajs, seed, lags, bs_dir.joinpath(f"{i}.pkl"), hp_idx)
     logging.info(f'Finished boostrap hp_ix: {hp_idx}')
 
 
-def get_input_trajs_top(data_dir: Path, top_path: Path, traj_glob: str) -> Dict[str, List[Path]]:
+def get_input_trajs_top(data_dir: Path, top_path: Path, traj_glob: str) -> Dict[str, List[str]]:
     trajs = list(data_dir.glob(traj_glob))
     top_path = data_dir.joinpath(top_path)
     if len(trajs) == 0:
@@ -202,6 +210,7 @@ def get_input_trajs_top(data_dir: Path, top_path: Path, traj_glob: str) -> Dict[
 
     top = str(top_path)
     trajs.sort()
+    trajs = [str(x) for x in trajs]
     logging.info(f"Topology loaded: {top}")
     logging.info(f"{len(trajs)} trajectories loaded: \n{trajs[:5]}\n...\n{trajs[-5:]}")
     return {'top': top, 'trajs': trajs}
