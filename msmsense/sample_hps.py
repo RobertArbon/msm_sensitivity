@@ -5,48 +5,95 @@ from pathlib import Path
 from typing import Dict, Union, List
 from argparse import ArgumentParser
 import yaml
+from copy import deepcopy
 
+from hyperopt.pyll.stochastic import sample
+from hyperopt import hp
 import numpy as np
 import pandas as pd
 
-from . import searchspace as cons
+# def sample_hps(hp_space: Dict[str, List[Union[int, str, float]]]) -> Dict[str, Union[int, str, float]]:
+#     sample = {}
+#     for k, v in hp_space.items():
+#         if len(v) == 1:
+#             sample[k] = v[0]
+#         elif isinstance(v[0], float):
+#             sample[k] = np.random.uniform(v[0], v[1])
+#         elif isinstance(v[0], int):
+#             sample[k] = np.random.choice(np.arange(v[0], v[1]+1))
+#         elif isinstance(v[0], str):
+#             sample[k] = np.random.choice(v)
+#     return sample
+#
 
-np.random.seed(149817)
+template = dict(
+    cluster__max_iter=None,
+    cluster__stride=None,
+    tica__dim=None,
+    tica__lag=None,
+    tica__kinetic_map=None,
+    tica__stride=None,
+    cluster__k=None,
+    feature__value=None,
+    dihedrals__which=None,
+    distances__scheme=None,
+    distances__transform=None,
+    distances__steepness=0,
+    distances__centre=0,
+)
+
+SEARCH_SPACE = {'cluster__max_iter': 1000,
+                 'cluster__stride': 10, 
+                 'tica__dim': hp.quniform('tica__dim', 1, 20, 1), 
+                 'tica__lag': hp.quniform('tica__lag', 1, 100, 1), 
+                 'tica__kinetic_map': True, 
+                 'tica__stride': 1, 
+                 'cluster__k': hp.quniform('cluster__k', 10, 500, 1), 
+                 'feature__value': hp.choice('feature__value', [
+                    {'feature__value': 'dihedrals', 
+                     'dihedrals__which': 'all'},
+                    {'feature__value': 'distances', 
+                     'distances__scheme': hp.choice('distances__scheme', ['ca', 'closest-heavy']), 
+                     'distances__transform': hp.choice('distances__transform', [
+                        'linear', 
+                        {'distances__transform': 'logistic', 
+                         'distances__steepness': hp.uniform('distances__steepness', 0.1, 50), 
+                         'distances__centre': hp.uniform('distances__centre', 0.2, 1.5)}])}
+                    ])
+                }
 
 
-def sample_hps(hp_space: Dict[str, List[Union[int, str, float]]]) -> Dict[str, Union[int, str, float]]:
-    sample = {}
-    for k, v in hp_space.items():
-        if len(v) == 1:
-            sample[k] = v[0]
-        elif isinstance(v[0], float):
-            sample[k] = np.random.uniform(v[0], v[1])
-        elif isinstance(v[0], int):
-            sample[k] = np.random.choice(np.arange(v[0], v[1]+1))
-        elif isinstance(v[0], str):
-            sample[k] = np.random.choice(v)
-    return sample
+def flatten(d):
+    items = []
+    for k, v in d.items():
+        if isinstance(v, dict):
+            items.extend(flatten(v).items())
+        else:
+            items.append((k, v))
+    return dict(items)
 
 
-def build_hp_sample(search_space: Dict[str, List[Union[str, int, float]]], num_trials: int) -> pd.DataFrame:
-    hps = {k: [] for k in search_space.keys()}
-
-    for i in range(num_trials):
-        tmp = sample_hps(search_space)
-        for k in hps.keys():
-            hps[k].append(tmp[k])
-
-    df = pd.DataFrame.from_dict(hps)
+def build_hp_sample(num_trials: int) -> pd.DataFrame:
+    from addict import Dict
+    all_hps = [Dict(deepcopy(template)) for _ in range(num_trials)]
+    for i,  hp in enumerate(all_hps):
+        hp.update(flatten(dict(sample(SEARCH_SPACE))))
+    df = pd.concat([pd.DataFrame.from_dict({k: [v] for k, v in hp.items()}) for hp in all_hps])
+    for col in df.columns:
+        if 'float' in str(df[col].dtype):
+            if 'distance' in col:
+                pass
+            else:
+                df[col] = df[col].astype(int)
     return df
 
 
 def save_sample(df: pd.DataFrame, path: Path) -> None:
-    df.to_hdf(str(path), key='hyperparameters')
+    df.to_hdf(str(path), key='hyperparameters', format='table')
 
 
 def parse_yaml(path: Path) -> Dict:
-    with path.open('rt') as f:
-        data = yaml.load(f, Loader=yaml.FullLoader)
+    with path.open('rt') as f: data = yaml.load(f, Loader=yaml.FullLoader)
     return data
 
 
@@ -59,29 +106,22 @@ def get_search_space(path: Union[Path, None]):
 
 
 def main(args, parser) -> None:
-    if args.seed is not None:
-        np.random.seed(args.seed)
-    if args.search_space is not None and args.search_space.suffix != '.yaml':
-        raise ValueError('Search space must be defined as YAML.')
     if args.output_file.suffix != '.h5':
         raise ValueError('Output file must h5')
 
-    hp_dict = get_search_space(args.search_space)
     num_trials = args.num_trials
     out_path = args.output_file
 
-    hp_df = build_hp_sample(hp_dict, num_trials)
+    hp_df = build_hp_sample(num_trials)
+
     save_sample(hp_df, out_path)
 
 
 def configure_parser(sub_subparser: ArgumentParser):
     p = sub_subparser.add_parser('hyperparameters')
-    p.add_argument('-i', '--search-space', type=Path, help='Path to file that defines the HP search space dictionary',
-                   required=False)
     p.add_argument('-n', '--num-trials', type=int, help='Number of HP trials', default=10)
     p.add_argument('-o', '--output-file', type=Path, help='Path to hd5 file to store HP samples',
                    required=True)
-    p.add_argument('-s', '--seed', type=int, help='Random seed', default=None)
     p.set_defaults(func=main)
 
 
