@@ -48,40 +48,38 @@ def vamp(cmat, T, method, k):
                       k=k, score=method)
 
 
-def score_cmats(cmats_by_lag) -> Outputs:
+def score_msms(mods_by_lag: Dict[int, pm.msm.MaximumLikelihoodMSM]) -> Outputs:
     ts_by_lag_by_proc = dict()
     vamp_by_lag_by_proc = dict()
-    for lag, cmat in cmats_by_lag.items():
-        if cmat is not None:
-            # Transition matrix
-            t_mat = _transition_matrix(cmat, reversible=True)
+    for lag, mod in mods_by_lag.items():
+        if mod is not None:
             # timescales
-            ts = _timescales(t_mat, tau=lag)
-            ts = ts[1:]
+            ts = mod.timescales()
             num_its = min(MAX_PROCS, int(np.sum(ts > lag)))
             proc_labels = (np.arange(num_its)+2).astype(int)
             ts_by_lag_by_proc[int(lag)] = dict(zip(proc_labels, ts[:num_its]))
             # VAMP scores
-            vamp_by_lag_by_proc[int(lag)] = {k: vamp(cmat, t_mat, method='VAMP2', k=k) for k in proc_labels}
+            cmat = mod.count_matrix_active
+            tmat = mod.transition_matrix
+            vamp_by_lag_by_proc[int(lag)] = {k: vamp(cmat, tmat, method='VAMP2', k=k) for k in proc_labels}
 
     outputs = Outputs(vamp_by_lag_by_proc=vamp_by_lag_by_proc,
                       ts_by_lag_by_proc=ts_by_lag_by_proc)
     return outputs
 
 
-def estimate_cmatrices(trajs: List[np.ndarray], lags: List[int]) -> Dict[int, np.ndarray]:
-    cmats_by_lag = dict()
+def estimate_msms(trajs: List[np.ndarray], lags: List[int]) -> Dict[int, pm.msm.MaximumLikelihoodMSM]:
+    mods_by_lag = dict()
     for lag in lags:
         cmat = None
         try:
             m = pm.msm.estimate_markov_model(trajs, lag=lag, reversible=True, connectivity='largest',
                                                  mincount_connectivity="1/n")
-            cmat = m.count_matrix_active
+            mods_by_lag[int(lag)] = m
         except RuntimeError:
-            pass
+            print(f'Error with model lag {lag}')
 
-        cmats_by_lag[int(lag)] = cmat
-    return cmats_by_lag
+    return mods_by_lag
 
 
 def get_sub_dict(hp_dict: Dict[str, List[Union[str, int]]], name: str) -> Mapping:
@@ -146,8 +144,8 @@ def get_trajs(traj_top_paths: Dict[str, List[Path]]) -> List[md.Trajectory]:
 def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.ndarray], seed: Union[int, None],
                  lags: List[int], out_dir: Path, hp_idx: int):
     disc_trajs = discretize_trajectories(hp_dict, feat_trajs, seed)
-    cmats_by_lag = estimate_cmatrices(disc_trajs, lags)
-    outputs = score_cmats(cmats_by_lag)
+    mods_by_lag = estimate_msms(disc_trajs, lags)
+    outputs = score_msms(mods_by_lag)
     outputs.ix = hp_idx
     write_outputs(outputs, out_dir)
     return True
