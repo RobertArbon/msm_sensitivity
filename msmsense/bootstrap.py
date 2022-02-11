@@ -219,8 +219,10 @@ def create_ouput_directory(path: Path) -> Path:
     return path
 
 
-def get_hyperparameters(path: str) -> pd.DataFrame:
-    hps = pd.read_hdf(path)
+def get_hyperparameters(path: str, hp_ixs: List[int]) -> pd.DataFrame:
+    hps = pd.DataFrame(pd.read_hdf(path))
+    if len(hp_ixs):
+        hps = hps.iloc[hp_ixs, :]
     logging.info(f"Hyper-parameter samples read from {str(path)}")
     logging.info(f"Hyper-parameter samples shape: {hps.shape}")
     logging.info(f"\n{hps.head()}")
@@ -244,7 +246,7 @@ def parse_lags(rng: str) -> List[int]:
 def bootstrap(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_repeats, num_cores, lags, output_dir, seed) -> None:
     output_dir = create_ouput_directory(output_dir.absolute())
     setup_logger(output_dir)
-    hps = get_hyperparameters(hp_sample)
+    hps = get_hyperparameters(hp_sample, hp_ixs)
     traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
     lags = parse_lags(lags)
     for i, row in hps.iterrows():

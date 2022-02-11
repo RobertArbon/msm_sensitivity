@@ -20,6 +20,4 @@ def cli():
 @click.option('-s', '--seed', type=int, help='Random seed', default=None)
 @click.argument('hp-ixs', type=int, nargs=-1)
 def score(hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores, lags, output_dir, seed, hp_ixs):
-    print(hp_ixs)
-
-    # bootstrap(hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores, lags, output_dir, seed)
+    bootstrap(hp_sample, list(hp_ixs), data_dir, topology_path, trajectory_glob, num_repeats, num_cores, lags, output_dir, seed)
