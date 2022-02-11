@@ -4,8 +4,6 @@ Tests msm sensitivity to hyperparameters
 """
 
 # Add imports here
-from .sample_hps import main
-from .bootstrap_cmatrices import main
 
 # Handle versioneer
 from ._version import get_versions

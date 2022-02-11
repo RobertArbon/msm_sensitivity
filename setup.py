@@ -45,7 +45,7 @@ setup(
     setup_requires=[] + pytest_runner,
     entry_points={
         'console_scripts': [
-            'msmsense = msmsense.__main__:main',
+            'msmsense = msmsense.msmsense:cli',
         ],
     }
     # Additional entries you may want simply uncomment the lines you want and fill in the data

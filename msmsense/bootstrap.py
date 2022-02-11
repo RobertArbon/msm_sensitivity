@@ -241,30 +241,15 @@ def parse_lags(rng: str) -> List[int]:
     return lags
 
 
-def main(args, parser) -> None:
-    output_dir = create_ouput_directory(args.output_dir.absolute())
+def bootstrap(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_repeats, num_cores, lags, output_dir, seed) -> None:
+    output_dir = create_ouput_directory(output_dir.absolute())
     setup_logger(output_dir)
-    hps = get_hyperparameters(args.hp_sample)
-    traj_top_paths = get_input_trajs_top(args.data_dir.absolute(), args.topology_path, args.trajectory_glob)
-    lags = parse_lags(args.lags)
+    hps = get_hyperparameters(hp_sample)
+    traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
+    lags = parse_lags(lags)
     for i, row in hps.iterrows():
         # Making an explicit dict and str variable so that type hinting is explicit.
         hp = {k: v for k, v in row.to_dict().items()}
         ix = str(i)
         logging.info(f"Running hyperparameters: {row}")
-        bootstrap_count_matrices((ix, hp), traj_top_paths, args.seed, args.num_repeats, args.num_cores, lags, output_dir)
-
-
-def configure_parser(sub_subparser: ArgumentParser):
-    p = sub_subparser.add_parser('count_matrices')
-    p.add_argument('-i', '--hp-sample', type=Path, help='Path to file that contains the hyperparameter samples')
-    p.add_argument('-d', '--data-dir', type=Path, help='Base directory used to determine trajectory and topology paths')
-    p.add_argument('-t', '--topology-path', type=Path, help='Topology path')
-    p.add_argument('-g', '--trajectory-glob', type=str, help='Trajectory glob string relative to --data-dir')
-    p.add_argument('-r', '--num-repeats', type=int, help='Number of bootstrap samples')
-    p.add_argument('-n', '--num-cores', type=int, help='Number of cpu cores to use.', default=1)
-    p.add_argument('-l', '--lags', type=str, help='Lags as a Python range specification start:end:stride',
-                   default='2:51:2')
-    p.add_argument('-o', '--output-dir', type=Path, help='Path to output directory')
-    p.add_argument('-s', '--seed', type=int, help='Random seed', default=None)
-    p.set_defaults(func=main)
+        bootstrap_count_matrices((ix, hp), traj_top_paths, seed, num_repeats, num_cores, lags, output_dir)

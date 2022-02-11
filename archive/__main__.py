@@ -7,8 +7,8 @@ from __future__ import print_function, absolute_import, division
 import sys
 import argparse
 
-from . import sample_hps
-from . import bootstrap_cmatrices
+from msmsense import sample_hps
+from msmsense import bootstrap
 # from . import parser_dump
 # from . import parser_skeleton
 # from . import parser_worker

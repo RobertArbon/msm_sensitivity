@@ -113,7 +113,7 @@ def main(args, parser) -> None:
     out_path = args.output_file
 
     hp_df = build_hp_sample(num_trials)
-
+    hp_df.reset_index(inplace=True)
     save_sample(hp_df, out_path)
 
 
