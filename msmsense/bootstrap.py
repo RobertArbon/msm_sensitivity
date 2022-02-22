@@ -243,7 +243,7 @@ def parse_lags(rng: str) -> List[int]:
     return lags
 
 
-def bootstrap(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_repeats, num_cores, lags, output_dir, seed) -> None:
+def score(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_repeats, num_cores, lags, output_dir, seed) -> None:
     output_dir = create_ouput_directory(output_dir.absolute())
     setup_logger(output_dir)
     hps = get_hyperparameters(hp_sample, hp_ixs)
@@ -255,3 +255,8 @@ def bootstrap(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_r
         ix = str(i)
         logging.info(f"Running hyperparameters: {row}")
         bootstrap_count_matrices((ix, hp), traj_top_paths, seed, num_repeats, num_cores, lags, output_dir)
+
+
+def compare(lag, process, comparator, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
+             output_dir, seed, hp_ixs):
+    pass
