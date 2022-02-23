@@ -105,24 +105,18 @@ def get_search_space(path: Union[Path, None]):
         return parse_yaml(path)
 
 
-def main(args, parser) -> None:
-    if args.output_file.suffix != '.h5':
+def main(num_trials, output_file) -> None:
+    if output_file.suffix != '.h5':
         raise ValueError('Output file must h5')
 
-    num_trials = args.num_trials
-    out_path = args.output_file
+    num_trials = num_trials
+    out_path = output_file
 
     hp_df = build_hp_sample(num_trials)
-    hp_df.reset_index(inplace=True)
+    hp_df.reset_index(inplace=True, drop=True)
+    hp_df.index.name = 'hp_ix'
     save_sample(hp_df, out_path)
 
-
-def configure_parser(sub_subparser: ArgumentParser):
-    p = sub_subparser.add_parser('hyperparameters')
-    p.add_argument('-n', '--num-trials', type=int, help='Number of HP trials', default=10)
-    p.add_argument('-o', '--output-file', type=Path, help='Path to hd5 file to store HP samples',
-                   required=True)
-    p.set_defaults(func=main)
 
 
 

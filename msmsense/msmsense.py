@@ -4,6 +4,7 @@ import click
 
 from .bootstrap import score as _score
 from .bootstrap import compare as _compare
+from .sample_hps import main as _sample
 
 
 @click.group()
@@ -28,7 +29,7 @@ def score(hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_
 
 @cli.command()
 @click.option('-l', '--lag', type=int, help='Lag of model')
-@click.option('-k', '--process', typ=int, help='Number of process to compare')
+@click.option('-k', '--process', type=int, help='Number of process to compare')
 @click.option('-c', '--comparator', type=int, help='The index of the comparator model')
 @click.option('-i', '--hp-sample', type=Path, help='Path to file that contains the hyperparameter samples')
 @click.option('-d', '--data-dir', type=Path, help='Base directory used to determine trajectory and topology paths')
@@ -43,3 +44,10 @@ def compare(lag, process, comparator, hp_sample, data_dir, topology_path, trajec
             output_dir, seed, hp_ixs):
     _compare(lag, process, comparator, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
              output_dir, seed, hp_ixs)
+
+
+@cli.command()
+@click.option('-n', '--num-trials', help='number of trials', type=int)
+@click.option('-o', '--output-file', help='output file', type=Path)
+def sample(num_trials, output_file):
+    _sample(num_trials, output_file)
