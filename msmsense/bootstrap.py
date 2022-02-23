@@ -10,6 +10,7 @@ from multiprocessing import cpu_count, Pool
 from functools import partial
 from argparse import ArgumentParser
 
+import pyemma.msm
 from msmtools.estimation import transition_matrix as _transition_matrix
 from msmtools.analysis import timescales as _timescales
 from pyemma.util.metrics import vamp_score
@@ -260,3 +261,56 @@ def score(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_repea
 def compare(lag, process, comparator, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
              output_dir, seed, hp_ixs):
     pass
+
+
+def sample_metastable_states(dtrajs: List[np.ndarray], lag: int, n_metastable: int, n_samples: int, traj_top_paths: Dict[str, List[str]]) -> List[md.Trajectory]:
+    print(f"Fitting HMM with lag: {lag}, with {n_metastable} hidden states")
+    msm = pm.msm.estimate_markov_model(dtrajs, lag=lag, reversible=True)
+    mod = msm.coarse_grain(n_metastable)
+
+    # Order by stationary distribution
+    # sd = mod.stationary_distribution
+    # state_ix = np.argsort(sd)[::-1]
+    # sd = sd[state_ix]
+    ms_dist = mod.metastable_distributions
+    # ms_dist = ms_dist[state_ix, :state_ix]
+
+    # Sample states
+    paths = traj_top_paths['trajs']
+    paths.sort()
+    print(f"Sampling HMM with for {n_samples} samples per state")
+    samples = [pm.coordinates.save_traj(paths, idist, outfile=None, top=traj_top_paths['top'])
+                for idist in msm.sample_by_distributions(ms_dist, n_samples)]
+    return samples
+
+
+def save_samples(samples: List[md.Trajectory], output_dir: Path, hp_ix: int) -> None:
+    save_dir = output_dir.joinpath('metastable_states', f'hp_{hp_ix}')
+    save_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Saving samples in {str(save_dir)}")
+    for i, traj in enumerate(samples):
+        traj.save_xtc(save_dir.joinpath(f"state_{str(i)}.xtc"))
+    samples[0][0].save_pdb(save_dir.joinpath('top.pdb'))
+
+
+def sample_metastable(hp_ix, n_metastable, lag,n_samples, hp_sample, data_dir, topology_path, trajectory_glob,
+                      output_dir, seed):
+    output_dir = create_ouput_directory(output_dir.absolute())
+    setup_logger(output_dir)
+    hp_dict = get_hyperparameters(hp_sample, [hp_ix])
+    hp_dict = {k: v[hp_ix] for k, v in hp_dict.items()}
+
+    traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
+    print(f"Discretizing trajectories with hps: {hp_dict}")
+    ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
+    dtrajs = discretize_trajectories(hp_dict, ftrajs, seed)
+    samples = sample_metastable_states(dtrajs=dtrajs, lag=lag, n_metastable=n_metastable, n_samples=n_samples,
+                                       traj_top_paths=traj_top_paths)
+    save_samples(samples, output_dir, hp_ix)
+
+
+
+
+
+
+
