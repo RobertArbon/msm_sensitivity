@@ -13,6 +13,7 @@ from argparse import ArgumentParser
 from msmtools.estimation import transition_matrix as _transition_matrix
 from msmtools.analysis import timescales as _timescales
 from pyemma.util.metrics import vamp_score
+from scipy.stats import entropy
 
 import pandas as pd
 import numpy as np
@@ -164,10 +165,95 @@ def get_feature_trajs(traj_top_paths: Dict[str, List[str]],hp_dict: Dict[str, Li
     return feat_trajs
 
 
+def get_all_projections(msm: pm.msm.MaximumLikelihoodMSM, num_procs: int, dtrajs: List[np.ndarray]) -> List[np.ndarray]:
+    """ Project dtrajs onto first num_proc eigenvectors excluding stationary distribution. i.e., if num_proc=1 then project onto the slowest eigenvector only. 
+    All projections ignore the stationary distribution
+    """
+    evs = msm.eigenvectors_right(num_procs+1)
+    active_set = msm.active_set
+    NON_ACTIVE_PROJ_VAL = np.nan # if the state is not in the active set, set the projection to this value. 
+    NON_ACTIVE_IX_VAL = -1
+    evs = evs[:, 1:] # remove the stationary distribution
+    proj_trajs = []
+    for dtraj in dtrajs:
+        all_procs = []
+        for proc_num in range(num_procs):
+
+            tmp = np.ones(dtraj.shape[0], dtype=float)
+            tmp[:] = NON_ACTIVE_PROJ_VAL
+
+            for i in range(dtraj.shape[0]):
+                x = msm._full2active[dtraj[i]]
+                if x != NON_ACTIVE_IX_VAL:
+                    tmp[i] = evs[x, proc_num]
+                tmp = tmp.reshape(-1, 1)
+
+            all_procs.append(tmp)
+        all_procs = np.concatenate(all_procs, axis=1)
+        proj_trajs.append(all_procs)
+
+    return proj_trajs
+
+
+def mixing_ent(x):
+    x = np.abs(x)
+    return entropy(x)
+
+
+def msm_projection_trajectories(hp_dict, feat_trajs, seed, lag, processes) -> List[np.array]: 
+    # Estimate MSM
+    disc_trajs = discretize_trajectories(hp_dict, feat_trajs, seed)
+    mod = estimate_msms(disc_trajs, [lag])[lag]
+    # Project onto MSM right eigenvectors
+    ptrajs = get_all_projections(mod, processes, disc_trajs)
+    return ptrajs
+
+
+def msm_projection_dataframe(ptrajs: List[np.ndarray], bs_traj_paths: List[str]) -> pd.DataFrame:
+    index = pd.MultiIndex.from_tuples([(bs_traj_paths[i], j) for i in range(len(bs_traj_paths)) for j in range(ptrajs[i].shape[0])])
+    ptrajs_all = np.concatenate(ptrajs, axis=0)
+    ptrajs_df = pd.DataFrame(ptrajs_all, index=index, columns=[f"{i + 2}" for i in range(ptrajs[0].shape[1])])
+    # Calculate the purity of the projections
+    ptrajs_df['mixing'] = ptrajs_df.apply(mixing_ent, axis=1)
+    ptrajs_df.dropna(inplace=True)
+    return ptrajs_df
+
+
+def sample_ev(n_ev: int, n_cut: int, ptrajs_df, top_path: str, threshold: float=1e-6) -> md.Trajectory:
+    n_ev = str(n_ev)
+    df = ptrajs_df.loc[:, [n_ev, 'mixing']].copy(deep=True)
+    df['cat'] = pd.qcut(df[n_ev], q=n_cut,  duplicates='drop')
+    df['min'] = df.groupby('cat')['mixing'].transform('min')
+    df = df.loc[np.abs(df['mixing'] - df['min']) < threshold, :]
+    sample = df.groupby('cat').sample(n=1)
+    sample.sort_values(by='cat', inplace=True)
+    sample_ixs = list(sample.index)
+    traj = md.join([md.load_frame(x, top=top_path, index=y) for x, y in sample_ixs])
+    return traj
+
+
+def bs_ev_sample(hp_dict: Dict[str, List[Union[str, int]]],
+             feat_trajs: List[np.ndarray], bs_ix: np.ndarray, seed: Union[int, None],
+             out_path: Path, hp_idx: int,
+             lag: int, processes: int, num_cuts: int, traj_paths: List[str], top_path: str) -> bool:
+    bs_traj_paths = [traj_paths[i] for i in bs_ix]
+    ptrajs = msm_projection_trajectories(hp_dict, feat_trajs, seed, lag, processes)
+    ptrajs_df = msm_projection_dataframe(ptrajs, bs_traj_paths)
+
+    result = dict()
+    for i in range(2, processes+2):
+        traj = sample_ev(i, num_cuts, ptrajs_df, top_path)
+        result[i] = traj
+    result['bs_ix'] = bs_ix
+    result['hp_ix'] = hp_idx
+    pickle.dump(obj=result, file=out_path.open('wb'))
+    return True
+
+
 def bootstrap(config: Tuple[str, Dict[str, List[Union[str, int]]]],
-                             traj_top_paths: Dict[str, List[str]], seed: int,
-                             bs_samples: int, n_cores: int, output_dir: Path, bs_func: Callable[..., bool],
-                            **kwargs) -> None:
+              traj_top_paths: Dict[str, List[str]], seed: int,
+              bs_samples: int, n_cores: int, output_dir: Path, bs_func: Callable[..., bool],
+              **kwargs) -> None:
     """ Bootstraps the count matrices at a series of lag times.
     """
     hp_idx, hp_dict = config
@@ -268,10 +354,11 @@ def score(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_repea
                   bs_func=bs_score, lags=lags)
 
 
-def sample_evs(lag, processes, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
+def sample_evs(lag, processes, num_cuts, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
              output_dir, seed, hp_ixs):
     output_dir = create_ouput_directory(output_dir.absolute())
     setup_logger(output_dir)
+    print('HP_IXs', hp_ixs)
     hps = get_hyperparameters(hp_sample, hp_ixs)
     traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
     for i, row in hps.iterrows():
@@ -279,4 +366,9 @@ def sample_evs(lag, processes, hp_sample, data_dir, topology_path, trajectory_gl
         hp = {k: v for k, v in row.to_dict().items()}
         ix = str(i)
         logging.info(f"Running hyperparameters: {row}")
-        bootstrap_sample_evs((ix, hp), lag, processes, traj_top_paths, seed, num_repeats, num_cores, output_dir)
+        bootstrap(config=(ix, hp),
+                  traj_top_paths=traj_top_paths,
+                  seed=seed, bs_samples=num_repeats, n_cores=num_cores,
+                  output_dir=output_dir,
+                  bs_func=bs_ev_sample, lag=lag, processes=processes, num_cuts=num_cuts,
+                  traj_paths=traj_top_paths['trajs'], top_path=traj_top_paths['top'])

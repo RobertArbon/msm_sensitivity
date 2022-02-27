@@ -30,6 +30,7 @@ def score(hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_
 @cli.command()
 @click.option('-l', '--lag', type=int, help='Lag of model')
 @click.option('-k', '--processes', type=int, help='Number of process to compare')
+@click.option('-q', '--num-cuts', type=int, help='Number of quantiles to cut the EV into')
 @click.option('-i', '--hp-sample', type=Path, help='Path to file that contains the hyperparameter samples')
 @click.option('-d', '--data-dir', type=Path, help='Base directory used to determine trajectory and topology paths')
 @click.option('-t', '--topology-path', type=Path, help='Topology path')
@@ -39,10 +40,10 @@ def score(hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_
 @click.option('-o', '--output-dir', type=Path, help='Path to output directory')
 @click.option('-s', '--seed', type=int, help='Random seed', default=None)
 @click.argument('hp-ixs', type=int, nargs=-1)
-def sample_evs(lag, processes, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
+def sample_evs(lag, processes, num_cuts, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
             output_dir, seed, hp_ixs):
-    _sample_evs(lag, processes, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
-             output_dir, seed, hp_ixs)
+    _sample_evs(lag, processes, num_cuts, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
+             output_dir, seed, list(hp_ixs))
 
 
 @cli.command()
