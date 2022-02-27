@@ -1,7 +1,7 @@
 """
 for a system (e.g., protein) saves features.
 """
-from typing import Dict, List, Mapping, Tuple, Optional, Union, Any
+from typing import Dict, List, Mapping, Tuple, Optional, Union, Any, Callable
 from pathlib import Path
 from dataclasses import dataclass, field
 import pickle
@@ -141,8 +141,14 @@ def get_trajs(traj_top_paths: Dict[str, List[Path]]) -> List[md.Trajectory]:
     return trajs
 
 
-def do_bootstrap(hp_dict: Dict[str, List[Union[str, int]]], feat_trajs: List[np.ndarray], seed: Union[int, None],
-                 lags: List[int], out_dir: Path, hp_idx: int):
+# results.append(pool.apply_async(func=bs_func,
+#                                 args=(hp_dict, ftrajs, bs_ix, seed,
+#                                       bs_dir.joinpath(f"{i}.pkl"), hp_idx),
+#                                 kwds=kwargs))
+def bs_score(hp_dict: Dict[str, List[Union[str, int]]],
+             feat_trajs: List[np.ndarray], bs_ix: np.ndarray, seed: Union[int, None],
+             out_dir: Path, hp_idx: int,
+             lags: List[int]):
     disc_trajs = discretize_trajectories(hp_dict, feat_trajs, seed)
     mods_by_lag = estimate_msms(disc_trajs, lags)
     outputs = score_msms(mods_by_lag)
@@ -158,9 +164,10 @@ def get_feature_trajs(traj_top_paths: Dict[str, List[str]],hp_dict: Dict[str, Li
     return feat_trajs
 
 
-def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]],
+def bootstrap(config: Tuple[str, Dict[str, List[Union[str, int]]]],
                              traj_top_paths: Dict[str, List[str]], seed: int,
-                             bs_samples: int, n_cores: int, lags: List[int], output_dir: Path) -> None:
+                             bs_samples: int, n_cores: int, output_dir: Path, bs_func: Callable[..., bool],
+                            **kwargs) -> None:
     """ Bootstraps the count matrices at a series of lag times.
     """
     hp_idx, hp_dict = config
@@ -176,15 +183,15 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
     n_workers = min(n_cores, bs_samples)
     logging.info(f"Bootstrapping hyper-parameter index value {hp_idx}")
     results = []
-    bs_dict = dict()
     if n_workers > 1:
         pool = Pool(n_workers)
         logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
         for i in range(bs_samples):
-            ftrajs, _ = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
-            results.append(pool.apply_async(func=do_bootstrap,
-                                            args=(hp_dict, ftrajs, seed, lags,
-                                                  bs_dir.joinpath(f"{i}.pkl"), hp_idx)))
+            ftrajs, bs_ix = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
+            results.append(pool.apply_async(func=bs_func,
+                                            args=(hp_dict, ftrajs, bs_ix, seed,
+                                                  bs_dir.joinpath(f"{i}.pkl"), hp_idx),
+                                            kwds=kwargs))
     
         for r in results:
             r.get()
@@ -193,8 +200,8 @@ def bootstrap_count_matrices(config: Tuple[str, Dict[str, List[Union[str, int]]]
         pool.join()
     else: 
         for i in range(bs_samples):
-            ftrajs, _ = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
-            do_bootstrap(hp_dict, ftrajs, seed, lags, bs_dir.joinpath(f"{i}.pkl"), hp_idx)
+            ftrajs, bs_ix = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
+            bs_func(hp_dict, ftrajs, bs_ix, seed, bs_dir.joinpath(f"{i}.pkl"), hp_idx, **kwargs)
     logging.info(f'Finished boostrap hp_ix: {hp_idx}')
 
 
@@ -254,9 +261,22 @@ def score(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_repea
         hp = {k: v for k, v in row.to_dict().items()}
         ix = str(i)
         logging.info(f"Running hyperparameters: {row}")
-        bootstrap_count_matrices((ix, hp), traj_top_paths, seed, num_repeats, num_cores, lags, output_dir)
+        bootstrap(config=(ix, hp),
+                  traj_top_paths=traj_top_paths,
+                  seed=seed, bs_samples=num_repeats, n_cores=num_cores,
+                  output_dir=output_dir,
+                  bs_func=bs_score, lags=lags)
 
 
-def compare(lag, process, comparator, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
+def sample_evs(lag, processes, hp_sample, data_dir, topology_path, trajectory_glob, num_repeats, num_cores,
              output_dir, seed, hp_ixs):
-    pass
+    output_dir = create_ouput_directory(output_dir.absolute())
+    setup_logger(output_dir)
+    hps = get_hyperparameters(hp_sample, hp_ixs)
+    traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
+    for i, row in hps.iterrows():
+        # Making an explicit dict and str variable so that type hinting is explicit.
+        hp = {k: v for k, v in row.to_dict().items()}
+        ix = str(i)
+        logging.info(f"Running hyperparameters: {row}")
+        bootstrap_sample_evs((ix, hp), lag, processes, traj_top_paths, seed, num_repeats, num_cores, output_dir)
