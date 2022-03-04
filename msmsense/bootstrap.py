@@ -89,13 +89,13 @@ def get_sub_dict(hp_dict: Dict[str, List[Union[str, int]]], name: str) -> Mappin
 
 
 def discretize_trajectories(hp_dict: Dict[str, List[Union[str, int]]], trajs: List[np.ndarray],
-                            seed: Union[int, None]) -> List[np.ndarray]:
+                            seed: Union[int, None]) -> Tuple[List[np.ndarray], np.ndarray]:
     tica = pm.coordinates.tica(trajs, **get_sub_dict(hp_dict, 'tica'))
     y = tica.get_output()
 
     kmeans = pm.coordinates.cluster_kmeans(y, **get_sub_dict(hp_dict, 'cluster'), fixed_seed=seed)
     z = kmeans.dtrajs
-    return z
+    return tica, kmeans
 
 
 def get_probabilities(trajs: List[np.ndarray]) -> np.ndarray:
@@ -150,7 +150,8 @@ def bs_score(hp_dict: Dict[str, List[Union[str, int]]],
              feat_trajs: List[np.ndarray], bs_ix: np.ndarray, seed: Union[int, None],
              out_dir: Path, hp_idx: int,
              lags: List[int]):
-    disc_trajs = discretize_trajectories(hp_dict, feat_trajs, seed)
+    tica, kmeans = discretize_trajectories(hp_dict, feat_trajs, seed)
+    disc_trajs = kmeans.dtrajs
     mods_by_lag = estimate_msms(disc_trajs, lags)
     outputs = score_msms(mods_by_lag)
     outputs.ix = hp_idx
@@ -202,7 +203,9 @@ def mixing_ent(x):
 
 def msm_projection_trajectories(hp_dict, feat_trajs, seed, lag, processes) -> List[np.array]: 
     # Estimate MSM
-    disc_trajs = discretize_trajectories(hp_dict, feat_trajs, seed)
+    tica, kmeans = discretize_trajectories(hp_dict, feat_trajs, seed)
+    disc_trajs = kmeans.dtrajs
+
     mod = estimate_msms(disc_trajs, [lag])[lag]
     # Project onto MSM right eigenvectors
     ptrajs = get_all_projections(mod, processes, disc_trajs)
