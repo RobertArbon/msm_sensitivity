@@ -253,6 +253,67 @@ def bs_ev_sample(hp_dict: Dict[str, List[Union[str, int]]],
     return True
 
 
+def project_bs(config, traj_top_paths, seed, n_cores, output_dir, lag, project_dir, project_ixs):
+
+    hp_idx, hp_dict = config
+    hp_idx = int(hp_idx)
+
+    logging.info(f"Getting feature trajectories")
+    all_ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
+    rng = get_rng(seed)
+
+    for project_ix in project_ixs:
+        # get bootstrap samples
+        bs_dir = project_dir.joinpath(f"hp_{project_ix}")
+        bs_files = list(bs_dir.glob('*.pkl'))
+        bs_samples = len(bs_files)
+
+        # output dir
+        bs_dir = output_dir.joinpath(f"hp_{str(hp_idx)}_ev_{str(project_ix)}")
+        bs_dir.mkdir(exist_ok=True)
+
+        n_workers = min(n_cores, bs_samples)
+
+        logging.info(f"Bootstrapping hyper-parameter index value {hp_idx}")
+        results = []
+        if n_workers > 1:
+            pool = Pool(n_workers)
+            logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
+            for i in range(bs_samples):
+                results.append(pool.apply_async(func=project_single_evs,
+                                                args=(hp_dict,
+                                                      lag,
+                                                      all_ftrajs,
+                                                      seed,
+                                                      bs_dir.joinpath(f"{i}.pkl"),
+                                                      bs_files[i],
+                                                      )
+                                                )
+                               )
+
+            for r in results:
+                r.get()
+
+            pool.close()
+            pool.join()
+        else:
+            pass
+            # for i in range(bs_samples):
+            #     ftrajs, bs_ix = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
+            #     bs_func(hp_dict, ftrajs, bs_ix, seed, bs_dir.joinpath(f"{i}.pkl"), hp_idx, **kwargs)
+        logging.info(f'Finished boostrap hp_ix: {hp_idx}')
+
+
+def project_single_evs(hp_dict: Dict, lag: int, all_ftrajs: List[np.ndarray], seed: int, output_dir: Path, ev_file: Path):
+    ev = pickle.load(ev_file.open('rb'))
+    bs_ix = ev['bs_ix']
+    ftrajs = [all_ftrajs[i] for i in bs_ix]
+
+    pass
+
+
+
+
 def bootstrap(config: Tuple[str, Dict[str, List[Union[str, int]]]],
               traj_top_paths: Dict[str, List[str]], seed: int,
               bs_samples: int, n_cores: int, output_dir: Path, bs_func: Callable[..., bool],
@@ -375,3 +436,49 @@ def sample_evs(lag, processes, num_cuts, hp_sample, data_dir, topology_path, tra
                   output_dir=output_dir,
                   bs_func=bs_ev_sample, lag=lag, processes=processes, num_cuts=num_cuts,
                   traj_paths=traj_top_paths['trajs'], top_path=traj_top_paths['top'])
+
+
+def project_evs(lag, hp_sample, data_dir, topology_path, trajectory_glob, num_cores,
+                   output_dir, seed, hp_ix, project_dir, project_ixs):
+    output_dir = create_ouput_directory(output_dir.absolute())
+    setup_logger(output_dir)
+    hps = get_hyperparameters(hp_sample, [hp_ix])
+    traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
+
+    # Making an explicit dict and str variable so that type hinting is explicit.
+    hp = {k: v[hp_ix] for k, v in hps.to_dict().items()}
+    logging.info(f"Running hyperparameters: {hp}")
+    project_bs(config=(hp_ix, hp),
+              traj_top_paths=traj_top_paths,
+              seed=seed, n_cores=num_cores,
+              output_dir=output_dir,
+              lag=lag,
+              project_dir=project_dir, project_ixs=project_ixs)
+
+
+def dump_dtrajs(hp_sample, data_dir, topology_path, trajectory_glob, output_dir, seed, hp_ixs) -> None:
+    output_dir = create_ouput_directory(output_dir.absolute())
+    setup_logger(output_dir)
+    print('HP_IXs', hp_ixs)
+    hps = get_hyperparameters(hp_sample, hp_ixs)
+    traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
+    for hp_idx, row in hps.iterrows():
+        hp = {k: v for k, v in row.to_dict().items()}
+        logging.info(f"Running hyperparameters: {row}")
+
+        hp_dir = output_dir.joinpath(f"hp_{str(hp_idx)}")
+        hp_dir.mkdir(exist_ok=True)
+
+        logging.info(f"Getting feature trajectories")
+        all_ftrajs = get_feature_trajs(traj_top_paths, hp)
+
+        tica, kmeans = discretize_trajectories(hp, all_ftrajs, seed)
+        dtrajs = kmeans.dtrajs
+        dtraj_ccs = kmeans.clustercenters
+
+        np.save(file=str(hp_dir.joinpath('cluster_centers.npy')), arr=dtraj_ccs)
+        for i in range(len(traj_top_paths['trajs'])):
+            fname = Path(traj_top_paths['trajs'][i]).stem
+            np.save(file=str(hp_dir.joinpath(fname)), arr=dtrajs[i])
+
+
