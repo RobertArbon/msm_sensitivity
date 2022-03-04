@@ -243,13 +243,17 @@ def bs_ev_sample(hp_dict: Dict[str, List[Union[str, int]]],
     ptrajs = msm_projection_trajectories(hp_dict, feat_trajs, seed, lag, processes)
     ptrajs_df = msm_projection_dataframe(ptrajs, bs_traj_paths)
 
+    # out_path assumes we want to save everything to a pickle, but we want to create a new directory
+    out_dir = out_path.with_suffix("")
+    out_dir.mkdir(exist_ok=True, parents=True)
+
     result = dict()
     for i in range(2, processes+2):
         traj = sample_ev(i, num_cuts, ptrajs_df, top_path)
-        result[i] = traj
+        traj.save_xtc(filename=str(out_dir.joinpath(f'ev_{i}.xtc')))
     result['bs_ix'] = bs_ix
     result['hp_ix'] = hp_idx
-    pickle.dump(obj=result, file=out_path.open('wb'))
+    pickle.dump(obj=result, file=out_dir.joinpath('metadata.pkl').open('wb'))
     return True
 
 
