@@ -10,8 +10,8 @@ from multiprocessing import cpu_count, Pool
 from functools import partial
 from argparse import ArgumentParser
 
-from msmtools.estimation import transition_matrix as _transition_matrix
-from msmtools.analysis import timescales as _timescales
+from pyemma.coordinates.transform import TICA
+from pyemma.coordinates.clustering import KmeansClustering
 from pyemma.util.metrics import vamp_score
 from scipy.stats import entropy
 
@@ -89,7 +89,8 @@ def get_sub_dict(hp_dict: Dict[str, List[Union[str, int]]], name: str) -> Mappin
 
 
 def discretize_trajectories(hp_dict: Dict[str, List[Union[str, int]]], trajs: List[np.ndarray],
-                            seed: Union[int, None]) -> Tuple[List[np.ndarray], np.ndarray]:
+                            seed: Union[int, None]) -> Tuple[TICA, KmeansClustering]:
+
     tica = pm.coordinates.tica(trajs, **get_sub_dict(hp_dict, 'tica'))
     y = tica.get_output()
 
@@ -142,10 +143,6 @@ def get_trajs(traj_top_paths: Dict[str, List[Path]]) -> List[md.Trajectory]:
     return trajs
 
 
-# results.append(pool.apply_async(func=bs_func,
-#                                 args=(hp_dict, ftrajs, bs_ix, seed,
-#                                       bs_dir.joinpath(f"{i}.pkl"), hp_idx),
-#                                 kwds=kwargs))
 def bs_score(hp_dict: Dict[str, List[Union[str, int]]],
              feat_trajs: List[np.ndarray], bs_ix: np.ndarray, seed: Union[int, None],
              out_dir: Path, hp_idx: int,
@@ -264,21 +261,20 @@ def project_bs(config, traj_top_paths, seed, n_cores, output_dir, lag, project_d
 
     logging.info(f"Getting feature trajectories")
     all_ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
-    rng = get_rng(seed)
 
     for project_ix in project_ixs:
         # get bootstrap samples
-        bs_dir = project_dir.joinpath(f"hp_{project_ix}")
-        bs_files = list(bs_dir.glob('*.pkl'))
-        bs_samples = len(bs_files)
+        bs_main_dir = project_dir.joinpath(f"hp_{project_ix}")
+        bs_dirs = list(bs_main_dir.glob('*'))
+        bs_samples = len(bs_dirs)
 
         # output dir
-        bs_dir = output_dir.joinpath(f"hp_{str(hp_idx)}_ev_{str(project_ix)}")
-        bs_dir.mkdir(exist_ok=True)
+        out_bs_dir = output_dir.joinpath(f"hp_{str(hp_idx)}_ev_{str(project_ix)}")
+        out_bs_dir.mkdir(exist_ok=True)
 
         n_workers = min(n_cores, bs_samples)
 
-        logging.info(f"Bootstrapping hyper-parameter index value {hp_idx}")
+        logging.info(f"Bootstrapping projections onto index value {hp_idx}")
         results = []
         if n_workers > 1:
             pool = Pool(n_workers)
@@ -287,10 +283,11 @@ def project_bs(config, traj_top_paths, seed, n_cores, output_dir, lag, project_d
                 results.append(pool.apply_async(func=project_single_evs,
                                                 args=(hp_dict,
                                                       lag,
+                                                      traj_top_paths['top'],
                                                       all_ftrajs,
                                                       seed,
-                                                      bs_dir.joinpath(f"{i}.pkl"),
-                                                      bs_files[i],
+                                                      out_bs_dir.joinpath(f"{i}.pkl"),
+                                                      bs_dirs[i],
                                                       )
                                                 )
                                )
@@ -308,14 +305,41 @@ def project_bs(config, traj_top_paths, seed, n_cores, output_dir, lag, project_d
         logging.info(f'Finished boostrap hp_ix: {hp_idx}')
 
 
-def project_single_evs(hp_dict: Dict, lag: int, all_ftrajs: List[np.ndarray], seed: int, output_dir: Path, ev_file: Path):
-    ev = pickle.load(ev_file.open('rb'))
-    bs_ix = ev['bs_ix']
-    ftrajs = [all_ftrajs[i] for i in bs_ix]
+def get_ttps_from_dir(dir: Path, top: str) -> Dict[str, Union[str, List[str]]]:
+    ev_traj_paths = list(dir.glob('*.xtc'))
+    ev_traj_paths.sort()
+    ev_traj_paths = [str(x) for x in ev_traj_paths]
+    return {'trajs': ev_traj_paths, 'top': top}
 
-    pass
+
+def randomize_trajs_from_metadata(dir: Path, trajs: List[np.ndarray]) -> List[np.ndarray]:
+    ev = pickle.load(dir.joinpath('metadata.pkl').open('rb'))
+    bs_ix = ev.pop('bs_ix')
+    _ = ev.pop('hp_ix')
+    return [trajs[i] for i in bs_ix]
 
 
+def project_single_evs(hp_dict: Dict, lag: int, top_path: str, all_ftrajs: List[np.ndarray], seed: int,
+                       output_path: Path, ev_dir: Path):
+
+    ttps = get_ttps_from_dir(ev_dir, top_path)
+    ev_ftrajs = get_feature_trajs(ttps, hp_dict)
+    ftrajs = randomize_trajs_from_metadata(ev_dir, all_ftrajs)
+
+    tica, kmeans = discretize_trajectories(hp_dict, ftrajs, seed)
+    disc_trajs = kmeans.dtrajs
+    mod = estimate_msms(disc_trajs, [lag])[lag]
+    results = dict()
+    for proc, ftraj in enumerate(ev_ftrajs):
+        # discretize the sample
+        ev_ttrajs = tica.transform([ftraj])
+        ev_dtrajs = kmeans.transform(ev_ttrajs)
+        ev_dtrajs = [x.flatten() for x in ev_dtrajs]
+        # Project onto MSM right eigenvectors
+        ptrajs = get_all_projections(mod, len(ev_ftrajs), ev_dtrajs)
+        results[proc+2] = ptrajs
+
+    pickle.dump(obj=results, file=output_path.open('wb'))
 
 
 def bootstrap(config: Tuple[str, Dict[str, List[Union[str, int]]]],
