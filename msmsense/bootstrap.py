@@ -266,6 +266,7 @@ def project_bs(config, traj_top_paths, seed, n_cores, output_dir, lag, project_d
         # get bootstrap samples
         bs_main_dir = project_dir.joinpath(f"hp_{project_ix}")
         bs_dirs = list(bs_main_dir.glob('*'))
+        bs_dirs.sort()
         bs_samples = len(bs_dirs)
 
         # output dir
@@ -279,15 +280,15 @@ def project_bs(config, traj_top_paths, seed, n_cores, output_dir, lag, project_d
         if n_workers > 1:
             pool = Pool(n_workers)
             logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
-            for i in range(bs_samples):
+            for bs_dir in bs_dirs:
                 results.append(pool.apply_async(func=project_single_evs,
                                                 args=(hp_dict,
                                                       lag,
                                                       traj_top_paths['top'],
                                                       all_ftrajs,
                                                       seed,
-                                                      out_bs_dir.joinpath(f"{i}.pkl"),
-                                                      bs_dirs[i],
+                                                      out_bs_dir.joinpath(bs_dir.name).with_suffix('.pkl'),
+                                                      bs_dir,
                                                       )
                                                 )
                                )
