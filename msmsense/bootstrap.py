@@ -366,10 +366,7 @@ def bootstrap(config: Tuple[str, Dict[str, List[Union[str, int]]]],
         with Pool(n_workers) as pool:
             logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
             for i in range(bs_samples):
-                logging.info('sampling trajectories')
-                logging.info(f"size: {np.sum([x.shape[0]*x.shape[1] for x in all_ftrajs])*64/8/1024/1024/1024}")
                 ftrajs, bs_ix = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
-                logging.info('appending ', i, ' to queue. ')
                 results.append(pool.apply_async(func=bs_func,
                                                 args=(hp_dict, ftrajs, bs_ix, seed,
                                                       bs_dir.joinpath(f"{i}.pkl"), hp_idx),
@@ -439,7 +436,6 @@ def score(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_repea
     output_dir = create_ouput_directory(output_dir.absolute())
     setup_logger(output_dir)
     hps = get_hyperparameters(hp_sample, hp_ixs)
-    print(data_dir, topology_path, trajectory_glob)
     traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
     lags = parse_lags(lags)
     for i, row in hps.iterrows():
@@ -564,3 +560,39 @@ def dump_dtrajs(hp_sample, data_dir, topology_path, trajectory_glob, output_dir,
             np.save(file=str(hp_dir.joinpath(fname)), arr=dtrajs[i])
 
 
+def ck_test(hp_ixs, n_metastable, lag, n_lags, num_repeats, num_cores, hp_sample, data_dir, topology_path, trajectory_glob,
+                      output_dir, seed):
+    output_dir = create_ouput_directory(output_dir.absolute())
+    setup_logger(output_dir)
+    hps = get_hyperparameters(hp_sample, hp_ixs)
+    traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
+
+    for i, row in hps.iterrows():
+        # Making an explicit dict and str variable so that type hinting is explicit.
+        hp = {k: v for k, v in row.to_dict().items()}
+        ix = str(i)
+        logging.info(f"Running hyperparameters: {row}")
+        bootstrap(config=(ix, hp),
+                  traj_top_paths=traj_top_paths,
+                  seed=seed, bs_samples=num_repeats, n_cores=num_cores,
+                  output_dir=output_dir,
+                  bs_func=bs_cktest, lag=lag, n_metastable=n_metastable, n_lags=n_lags)
+
+
+def bs_cktest(hp_dict: Dict[str, List[Union[str, int]]],
+             feat_trajs: List[np.ndarray], bs_ix: np.ndarray, seed: Union[int, None],
+             out_dir: Path, hp_idx: int,
+             lag: int, n_metastable, n_lags):
+        try:
+            tica, kmeans = discretize_trajectories(hp_dict, feat_trajs, seed)
+            disc_trajs = kmeans.dtrajs
+            mod = estimate_msms(disc_trajs, [lag])[lag]
+            cktest = mod.cktest(nsets=n_metastable, mlags=n_lags)
+            outputs = dict(predictions=cktest.predictions[np.newaxis, ...],
+                           estimates=cktest.estimates[np.newaxis, ...],
+                           bs_ix=bs_ix,
+                           hp_idx=hp_idx)
+            pickle.dump(file=out_dir.open('wb'), obj=outputs)
+        except Exception as e:
+            logging.info(e)
+        return True
