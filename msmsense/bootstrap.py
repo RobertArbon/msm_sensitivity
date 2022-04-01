@@ -1,5 +1,6 @@
 """
 for a system (e.g., protein) saves features.
+
 """
 from typing import Dict, List, Mapping, Tuple, Optional, Union, Any, Callable
 from pathlib import Path
@@ -7,6 +8,7 @@ from dataclasses import dataclass, field
 import pickle
 import logging
 from multiprocessing import Pool
+from functools import partial
 
 from pyemma.coordinates.transform import TICA
 from pyemma.coordinates.clustering import KmeansClustering
@@ -141,9 +143,10 @@ def get_trajs(traj_top_paths: Dict[str, List[Path]]) -> List[md.Trajectory]:
 
 
 def bs_score(hp_dict: Dict[str, List[Union[str, int]]],
-             feat_trajs: List[np.ndarray], bs_ix: np.ndarray, seed: Union[int, None],
+             bs_ix: np.ndarray, seed: Union[int, None],
              out_dir: Path, hp_idx: int,
-             lags: List[int]):
+             lags: List[int], all_ftrajs: List[np.ndarray]):
+    feat_trajs = [all_ftrajs[i] for i in bs_ix]
     try:
         tica, kmeans = discretize_trajectories(hp_dict, feat_trajs, seed)
         disc_trajs = kmeans.dtrajs
@@ -357,6 +360,8 @@ def bootstrap(config: Tuple[str, Dict[str, List[Union[str, int]]]],
 
     logging.info(f"Getting feature trajectories")
     all_ftrajs = get_feature_trajs(traj_top_paths, hp_dict)
+    bs_func = partial(bs_func, all_ftrajs=all_ftrajs)
+
     rng = get_rng(seed)
 
     n_workers = min(n_cores, bs_samples)
@@ -366,9 +371,9 @@ def bootstrap(config: Tuple[str, Dict[str, List[Union[str, int]]]],
         with Pool(n_workers) as pool:
             logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
             for i in range(bs_samples):
-                ftrajs, bs_ix = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
+                _, bs_ix = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
                 results.append(pool.apply_async(func=bs_func,
-                                                args=(hp_dict, ftrajs, bs_ix, seed,
+                                                args=(hp_dict, bs_ix, seed,
                                                       bs_dir.joinpath(f"{i}.pkl"), hp_idx),
                                                 kwds=kwargs))
     

@@ -98,7 +98,6 @@ def dump_dtrajs(hp_sample, data_dir, topology_path, trajectory_glob, output_dir,
 
 
 @cli.command()
-@click.option('-h', '--hp-ix', type=int, help='HP index')
 @click.option('-n', '--n-metastable', type=int, help='Number of metastable states')
 @click.option('-l', '--lag', type=int, help='Lag of model')
 @click.option('-a', '--num-repeats', type=int, help='Number of samples')
@@ -109,7 +108,8 @@ def dump_dtrajs(hp_sample, data_dir, topology_path, trajectory_glob, output_dir,
 @click.option('-g', '--trajectory-glob', type=str, help='Trajectory glob string relative to --data-dir')
 @click.option('-o', '--output-dir', type=Path, help='Path to output directory')
 @click.option('-s', '--seed', type=int, help='Random seed', default=None)
-def ck_test(hp_ix, n_metastable, lag, num_repeats, num_cores, hp_sample, data_dir, topology_path, trajectory_glob,
+@click.argument('hp-ixs', type=int, nargs=-1)
+def ck_test(hp_ixs, n_metastable, lag, num_repeats, num_cores, hp_sample, data_dir, topology_path, trajectory_glob,
                       output_dir, seed):
-    _ck_test(hp_ix, n_metastable, lag, num_repeats, num_cores, hp_sample, data_dir, topology_path, trajectory_glob,
+    _ck_test(hp_ixs, n_metastable, lag, num_repeats, num_cores, hp_sample, data_dir, topology_path, trajectory_glob,
                       output_dir, seed)
