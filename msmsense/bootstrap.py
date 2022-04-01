@@ -90,12 +90,9 @@ def get_sub_dict(hp_dict: Dict[str, List[Union[str, int]]], name: str) -> Mappin
 
 def discretize_trajectories(hp_dict: Dict[str, List[Union[str, int]]], trajs: List[np.ndarray],
                             seed: Union[int, None]) -> Tuple[TICA, KmeansClustering]:
-
     tica = pm.coordinates.tica(trajs, **get_sub_dict(hp_dict, 'tica'))
     y = tica.get_output()
-
     kmeans = pm.coordinates.cluster_kmeans(y, **get_sub_dict(hp_dict, 'cluster'), fixed_seed=seed)
-    z = kmeans.dtrajs
     return tica, kmeans
 
 
@@ -114,12 +111,15 @@ def get_rng(seed: Union[int, None]) -> Any:
 
 
 def sample_trajectories(trajs: List[np.ndarray], rng: Any, randomize: bool = True) -> Tuple[List[np.ndarray], np.ndarray]:
+    logging.debug('in sample trajectories')
     ix = np.arange(len(trajs))
     if randomize:
+        logging.debug('randomizing')
         probs = get_probabilities(trajs)
         sample_ix = rng.choice(ix, size=ix.shape[0], p=probs, replace=True)
     else:
         sample_ix = ix
+    logging.debug('resampling')
     sampled_trajs = [trajs[i] for i in sample_ix]
     return sampled_trajs, sample_ix
 
@@ -147,12 +147,15 @@ def bs_score(hp_dict: Dict[str, List[Union[str, int]]],
              feat_trajs: List[np.ndarray], bs_ix: np.ndarray, seed: Union[int, None],
              out_dir: Path, hp_idx: int,
              lags: List[int]):
-    tica, kmeans = discretize_trajectories(hp_dict, feat_trajs, seed)
-    disc_trajs = kmeans.dtrajs
-    mods_by_lag = estimate_msms(disc_trajs, lags)
-    outputs = score_msms(mods_by_lag)
-    outputs.ix = hp_idx
-    write_outputs(outputs, out_dir)
+    try:
+        tica, kmeans = discretize_trajectories(hp_dict, feat_trajs, seed)
+        disc_trajs = kmeans.dtrajs
+        mods_by_lag = estimate_msms(disc_trajs, lags)
+        outputs = score_msms(mods_by_lag)
+        outputs.ix = hp_idx
+        write_outputs(outputs, out_dir)
+    except Exception as e:
+        logging.info(e)
     return True
 
 
@@ -363,23 +366,29 @@ def bootstrap(config: Tuple[str, Dict[str, List[Union[str, int]]]],
     logging.info(f"Bootstrapping hyper-parameter index value {hp_idx}")
     results = []
     if n_workers > 1:
-        pool = Pool(n_workers)
-        logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
-        for i in range(bs_samples):
-            ftrajs, bs_ix = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
-            results.append(pool.apply_async(func=bs_func,
-                                            args=(hp_dict, ftrajs, bs_ix, seed,
-                                                  bs_dir.joinpath(f"{i}.pkl"), hp_idx),
-                                            kwds=kwargs))
+        with Pool(n_workers) as pool:
+            logging.info(f'Launching {bs_samples} jobs on {n_workers} cores')
+            for i in range(bs_samples):
+                logging.info('sampling trajectories')
+                logging.info(f"size: {np.sum([x.shape[0]*x.shape[1] for x in all_ftrajs])*64/8/1024/1024/1024}")
+                ftrajs, bs_ix = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
+                logging.info('appending ', i, ' to queue. ')
+                results.append(pool.apply_async(func=bs_func,
+                                                args=(hp_dict, ftrajs, bs_ix, seed,
+                                                      bs_dir.joinpath(f"{i}.pkl"), hp_idx),
+                                                kwds=kwargs))
     
-        for r in results:
-            r.get()
+            for r in results:
+                r.get()
     
-        pool.close()
-        pool.join()
+        # pool.close()
+        # pool.join()
     else: 
         for i in range(bs_samples):
+            logging.info('running ', i)
             ftrajs, bs_ix = sample_trajectories(all_ftrajs, rng, bs_samples > 1)
+
+            logging.info('starting bs_func')
             bs_func(hp_dict, ftrajs, bs_ix, seed, bs_dir.joinpath(f"{i}.pkl"), hp_idx, **kwargs)
     logging.info(f'Finished boostrap hp_ix: {hp_idx}')
 
@@ -433,6 +442,7 @@ def score(hp_sample, hp_ixs, data_dir, topology_path, trajectory_glob, num_repea
     output_dir = create_ouput_directory(output_dir.absolute())
     setup_logger(output_dir)
     hps = get_hyperparameters(hp_sample, hp_ixs)
+    print(data_dir, topology_path, trajectory_glob)
     traj_top_paths = get_input_trajs_top(data_dir.absolute(), topology_path, trajectory_glob)
     lags = parse_lags(lags)
     for i, row in hps.iterrows():
