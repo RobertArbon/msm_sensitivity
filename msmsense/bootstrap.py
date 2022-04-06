@@ -23,13 +23,14 @@ import mdtraj as md
 from .featurizers import distances, dihedrals
 
 
-MAX_PROCS = 20  # don't want more than this many processes
+MAX_PROCS = 50  # don't want more than this many processes
 
 
 @dataclass
 class Outputs:
     vamp_by_lag_by_proc: Dict[int, Dict[int, np.ndarray]]
     ts_by_lag_by_proc: Dict[int, Dict[int, np.ndarray]]
+    evs_by_lag_by_proc: Dict[int, Dict[int, np.ndarray]]
     ix: int = None
 
 
@@ -51,10 +52,12 @@ def vamp(cmat, T, method, k):
 def score_msms(mods_by_lag: Dict[int, pm.msm.MaximumLikelihoodMSM]) -> Outputs:
     ts_by_lag_by_proc = dict()
     vamp_by_lag_by_proc = dict()
+    evs_by_lag_by_proc = dict()
     for lag, mod in mods_by_lag.items():
         if mod is not None:
             # timescales
             ts = mod.timescales()
+            evs = mod.eigenvalues()
             num_its = min(MAX_PROCS, int(np.sum(ts > lag)))
             proc_labels = (np.arange(num_its)+2).astype(int)
             ts_by_lag_by_proc[int(lag)] = dict(zip(proc_labels, ts[:num_its]))
@@ -62,9 +65,12 @@ def score_msms(mods_by_lag: Dict[int, pm.msm.MaximumLikelihoodMSM]) -> Outputs:
             cmat = mod.count_matrix_active
             tmat = mod.transition_matrix
             vamp_by_lag_by_proc[int(lag)] = {k: vamp(cmat, tmat, method='VAMP2', k=k) for k in proc_labels}
+            evs_by_lag_by_proc[int(lag)] = {k: evs[k-1] for k in proc_labels}  # interested in index 1 onwards.
+                                                                               # k starts from 2.
 
     outputs = Outputs(vamp_by_lag_by_proc=vamp_by_lag_by_proc,
-                      ts_by_lag_by_proc=ts_by_lag_by_proc)
+                      ts_by_lag_by_proc=ts_by_lag_by_proc,
+                      evs_by_lag_by_proc=evs_by_lag_by_proc)
     return outputs
 
 
@@ -380,8 +386,8 @@ def bootstrap(config: Tuple[str, Dict[str, List[Union[str, int]]]],
             for r in results:
                 r.get()
     
-        # pool.close()
-        # pool.join()
+            pool.close()
+            pool.join()
     else: 
         for i in range(bs_samples):
             logging.info('running ', i)
